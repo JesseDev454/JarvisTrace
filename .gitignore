@@ -1,0 +1,36 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Model weights
+*.pt
+*.onnx
+*.engine
+
+# Datasets, raw/annotated videos, and local experiment outputs
+datasets/
+runs/
+outputs/
+*.mp4
+*.avi
+*.mpg
+*.mov
+*.mkv
+bus.jpg
+
+# OS / IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+

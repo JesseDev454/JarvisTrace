@@ -1,0 +1,4 @@
+# Add these lines to your main scene-search-prototype/.gitignore if missing:
+data/
+videos/
+runs/

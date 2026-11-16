@@ -1,0 +1,34 @@
+{
+  "video_id": "test01_863e5601e3b5",
+  "verified_from_user_provided_frames": true,
+  "windows": [
+    {
+      "window": 1,
+      "time_range_s": [0, 4],
+      "frame_times_s": [0, 2, 3, 4],
+      "backpack_ground_truth": "At 0s and 2s the black backpack rests on the chair. At 3s the person handles the backpack near the chair. At 4s the backpack is standing on the wooden desk while the person touches it.",
+      "event": "Backpack relocated from chair to desk.",
+      "last_visible_location": "Wooden desk",
+      "common_model_errors": ["Claims a second person is present", "Claims a backpack is on the floor"]
+    },
+    {
+      "window": 2,
+      "time_range_s": [3, 7],
+      "frame_times_s": [3, 4, 6, 7],
+      "backpack_ground_truth": "The backpack is being handled near the chair at 3s, on the wooden desk at 4s, and remains on the desk at 6s and 7s. At 6s a person places a water bottle beside it; at 7s the person walks away.",
+      "event": "Backpack moved to desk and left there; bottle placed beside it.",
+      "last_visible_location": "Wooden desk",
+      "common_model_errors": ["Claims backpack was picked up again at 18.09 seconds", "Moves the backpack back to chair"]
+    },
+    {
+      "window": 3,
+      "time_range_s": [6, 10],
+      "frame_times_s": [6, 7, 8, 9],
+      "backpack_ground_truth": "The black backpack stays on the wooden desk in every frame. A water bottle is on the desk, and a person walks toward the door and exits the main room view by 9s.",
+      "event": "Person leaves room; backpack and bottle remain on desk. No observed backpack movement.",
+      "last_visible_location": "Wooden desk",
+      "common_model_errors": ["Claims the backpack moved from table to chair", "Claims two backpacks are visible"]
+    }
+  ],
+  "evaluation_note": "These labels are manually reviewed ground truth for a single short clip, not a statistically representative benchmark. Human reviewers should compare each generated frame state and event to images rather than to text similarity alone."
+}

@@ -1,6 +1,8 @@
+> Current project: **Text-Guided Surveillance Video Retrieval for Portable Objects**. Start with the [project audit](docs/PROJECT_AUDIT.md), [architecture](docs/ARCHITECTURE.md), and [Stage 9 review guide](docs/STAGE9_REVIEW.md). The legacy CLI and verification experiments below are preserved historical work; the removed verification module is not part of the current application plan.
+
 # Group 8 — Evidence-Guided Multi-Camera Visual Asset Retrieval System
 
-**Milestone 3: OpenCLIP + ChromaDB Description-Based Visual Asset Retrieval & Synchronization-Aware Indexing**
+**Milestone 4: Reference Asset Anchoring, Multi-Factor Candidate Verification & OpenCLIP + ChromaDB Retrieval**
 
 ## Overview & Problem Statement
 
@@ -8,7 +10,8 @@ Reviewing CCTV footage across multiple cameras to locate a misplaced physical as
 1. Ingests prerecorded videos from multiple cameras with independent local tracking namespaces and deterministic source content fingerprints (`sha256`).
 2. Aligns cross-camera timelines **only** when explicit recording start datetimes (`--start-time`) or relative synchronization offsets (`--time-offset`) are provided — never inventing CCTV timestamps.
 3. Separates **raw detector confidence** from **heuristic within-camera track stability**, distinguishes **latest raw class detections** from **last strongly supported sightings**, and returns **`INCONCLUSIVE`** whenever cross-camera synchronization, tracking loss, simultaneous multi-camera sightings, or unlinked camera views prevent a verified final location.
-4. Supports **natural-language visual search** (e.g., `"black laptop"`, `"person holding a black laptop"`, `"black desk telephone"`) using **OpenCLIP** (`ViT-B-32`, `laion2b_s34b_b79k`) and **ChromaDB** over both **tight object crops (`crop`)** and **context-preserving regions (`context`)**, while keeping SQLite authoritative and never conflating uncalibrated CLIP cosine similarity with physical object identity.
+4. Supports **natural-language visual search** (e.g., `"black laptop"`, `"person holding a black laptop"`, `"black desk telephone"`) using **OpenCLIP** (`ViT-B-32`, `laion2b_s34b_b79k`) and **ChromaDB** over both **tight object crops (`crop`)** and **context-preserving regions (`context`)**, while keeping SQLite authoritative.
+5. Anchors a **reference asset track** across multiple representative appearance states (e.g., open on desk, peak confidence, closed/carried) and evaluates candidate tracks across 6 independent evidence factors, producing calibrated outcomes (`SUPPORTED_CANDIDATE`, `CONTRADICTED_CANDIDATE`, or `INCONCLUSIVE`) without ever fabricating probabilities or silently merging tracks.
 
 ---
 
@@ -24,79 +27,58 @@ Reviewing CCTV footage across multiple cameras to locate a misplaced physical as
 - [`src/retrieval.py`](src/retrieval.py):
   - [`determine_synchronization_mode`](src/retrieval.py#L145-L187) and [`build_retrieval_report`](src/retrieval.py#L420-L781) compute per-camera summaries, cross-camera conflict/departure observations, and calibrated conclusion statuses (`STRONGLY_SUPPORTED`, `UNCERTAIN_CANDIDATE`, `INCONCLUSIVE`).
 - [`src/visual_search.py`](src/visual_search.py):
-  - [`OpenCLIPEmbedder`](src/visual_search.py#L75-L169) loads OpenCLIP (`ViT-B-32`, `laion2b_s34b_b79k`, 512-dim) once onto CUDA (`cuda:0`) when available and computes L2-normalized image and text embeddings without gradients.
-  - [`extract_context_region_pil`](src/visual_search.py#L188-L217) and [`VideoFrameContextReader`](src/visual_search.py#L220-L256) extract expanded context-preserving regions around detected objects from clean source video frames (falling back to saved evidence frames).
-  - [`ChromaVisualIndex`](src/visual_search.py#L413-L796) manages the persistent ChromaDB vector index at `outputs/chroma_db` (`sighting_visual_embeddings`), stores deterministic IDs (`s<sighting_id>_<variant>_<model_id>`), automatically prunes stale embeddings when SQLite runs are replaced, and resolves natural-language queries against SQLite sightings grouped by isolated candidate tracks.
+  - [`OpenCLIPEmbedder`](src/visual_search.py#L87-L182) loads OpenCLIP (`ViT-B-32`, `laion2b_s34b_b79k`, 512-dim) once onto CUDA (`cuda:0`) when available and computes L2-normalized image and text embeddings without gradients.
+  - [`ChromaVisualIndex`](src/visual_search.py#L437-L855) manages the persistent ChromaDB vector index at `outputs/chroma_db` (`sighting_visual_embeddings`), provides explicit OS file-handle cleanup via [`ChromaVisualIndex.close`](src/visual_search.py#L465-L485), automatically prunes stale embeddings when SQLite runs are replaced, and resolves natural-language queries against SQLite sightings.
+- [`src/verification.py`](src/verification.py):
+  - [`build_reference_asset_anchor`](src/verification.py#L345-L505) anchors a reference track/sighting with its multi-appearance states (`first_appearance_state`, `peak_confidence_state`, `last_strongly_supported_state`, `track_fadeout_last_state`), bounding-box geometries, BGR patches, and OpenCLIP crop/context embeddings.
+  - [`verify_candidates_against_reference`](src/verification.py#L508-L654) evaluates candidate tracks independently across 6 separate evidence factors: (1) OpenCLIP crop/context similarity, (2) HSV color histogram & patch correlation, (3) temporal ordering & camera synchronization, (4) detector confidence & heuristic track stability, (5) pre-arrival Frame 0 background stationarity (`NCC`), and (6) spatial/temporal track conflicts.
 - [`src/comparison.py`](src/comparison.py):
-  - [`analyze_tracking_gap_and_candidates`](src/comparison.py#L87-L390) investigates within-camera tracking gaps, concurrent person carrier trajectories, and pre-arrival Frame 0 background stationarity (`NCC`) vs. HSV histogram similarity.
+  - [`analyze_tracking_gap_and_candidates`](src/comparison.py#L87-L390) investigates within-camera tracking gaps and concurrent person carrier trajectories.
 - [`src/cli.py`](src/cli.py):
-  - CLI providing `ingest`, `ingest-batch`, `query`, `compare-tracks`, `index-embeddings`, `search`, and `index-stats`.
+  - CLI providing `ingest`, `ingest-batch`, `query`, `compare-tracks`, `index-embeddings`, `search`, `index-stats`, and `verify-candidates`.
 - [`tests/test_indexer_and_retrieval.py`](tests/test_indexer_and_retrieval.py):
-  - 24 automated unit and live-verification tests covering single-camera indexing, multi-camera evaluation scenarios, and OpenCLIP + ChromaDB visual retrieval safeguards.
+  - 30 automated unit and live-verification tests covering single-camera indexing, multi-camera evaluation scenarios, OpenCLIP + ChromaDB visual retrieval, and reference-anchored candidate verification.
 
 ---
 
-## Environment, Pretrained Models & Data Storage Locations
-
-Verified local environment (`.venv`, Windows 11, NVIDIA GeForce RTX 4060 Laptop GPU 8GB VRAM):
-- Python `3.13.17`, PyTorch `2.14.0+cu130`, TorchVision `0.29.0+cu130`
-- Ultralytics `8.4.202` (`yolo11m.pt` + `botsort.yaml`)
-- OpenCLIP (`open_clip_torch`) `3.3.0` — Pretrained model: `ViT-B-32` (`laion2b_s34b_b79k`, 512-dim L2-normalized embeddings, cached under `~/.cache/huggingface/hub/`)
-- ChromaDB `1.5.9`, FastAPI `0.162.0`, Uvicorn `0.54.0`, OpenCV `5.0.0.93`
-
-### Storage Locations
-- **Authoritative SQLite Database**: `outputs/sightings.db`
-- **JSONL Sighting Export**: `outputs/sightings.jsonl`
-- **Saved Evidence Frames & Crops**: `outputs/evidence/<camera_id>/<video_stem>/{frames,crops}/`
-- **Annotated Tracking Videos**: `outputs/annotated_videos/<camera_id>_<video_stem>/`
-- **Persistent ChromaDB Vector Index**: `outputs/chroma_db/` (collection: `sighting_visual_embeddings`)
-
-See [`requirements.txt`](requirements.txt) for pinned package versions.
-
----
-
-## CLI Usage & Reproducing the Laptop Visual Search Experiment
+## CLI Usage & Reproducing Experiments
 
 Run all commands from `C:\Users\hp\Documents\group8-visual-asset-retrieval` using `.\.venv\Scripts\python.exe`.
 
-### 1. Build / Rebuild the OpenCLIP + ChromaDB Visual Index
+### 1. Anchor Reference Track & Verify Candidate Tracks (`laptop_test.mp4`)
 
 ```powershell
-# Build (or rebuild from scratch) crop + context embeddings for all SQLite sightings with saved evidence
+# Anchor local_track_1 in laptop_test.mp4 (office_cam_01) and verify candidate tracks (local_track_7 and local_track_12)
+.\.venv\Scripts\python.exe -m src.cli verify-candidates `
+  --ref-camera-id office_cam_01 `
+  --ref-video laptop_test.mp4 `
+  --ref-track-id 1 `
+  --class-name laptop
+
+# Emit full structured JSON verification report (with all 6 separate evidence factor dictionaries)
+.\.venv\Scripts\python.exe -m src.cli verify-candidates `
+  --ref-camera-id office_cam_01 `
+  --ref-video laptop_test.mp4 `
+  --ref-track-id 1 `
+  --json
+```
+
+**Observed Results on `laptop_test.mp4` (`office_cam_01`):**
+- **Reference Anchor (`run1:office_cam_01:laptop_test.mp4:local_track_1`):** `STRONGLY_SUPPORTED` (`stability=0.95`, frames `0..110`, last strongly supported at Frame `107` / `+4.458s`). Captures 4 representative states from open on foreground desk (`210.3x203.6 px` at Frame `0`) to closed/carried (`108.9x44.5 px` at Frame `107`).
+- **Candidate 1 (`run1:office_cam_01:laptop_test.mp4:local_track_7`, frames `178..208`):** **`CONTRADICTED_CANDIDATE`** — Although OpenCLIP crop similarity against the thin closed laptop reaches `0.7955`, Frame 0 pre-arrival background `NCC = 0.9851` (`>= 0.90`) and HSV color correlation (`max = 0.1152`) prove the tight bounding box encloses the pre-existing stationary black desk telephone.
+- **Candidate 2 (`run1:office_cam_01:laptop_test.mp4:local_track_12`, frames `200..215`):** **`INCONCLUSIVE`** — Supporting evidence includes OpenCLIP crop similarity (`0.7721` against closed state), continuous person carrier trajectory (`local_track_2`), and lower-left sub-region divergence from Frame 0 (`placed_subregion_ncc = 0.7706`). However, low detector confidence (`mean = 0.26`, `0/16` frames `>= 0.50`), partial background conflation with the adjacent desk phone (`full-box Frame 0 NCC = 0.8279`), and spatial nesting with `local_track_7` require returning `INCONCLUSIVE` without merging.
+
+### 2. Build / Rebuild OpenCLIP + ChromaDB Index & Run Description Search
+
+```powershell
 .\.venv\Scripts\python.exe -m src.cli index-embeddings --rebuild
-
-# Inspect persisted embedding statistics and SQLite synchronization status
 .\.venv\Scripts\python.exe -m src.cli index-stats
-```
-
-### 2. Run Natural-Language Description Searches (`laptop_test.mp4`)
-
-```powershell
-# Search 1: "black laptop"
 .\.venv\Scripts\python.exe -m src.cli search --query "black laptop" --top-k 10
-
-# Search 2: "person holding a black laptop"
 .\.venv\Scripts\python.exe -m src.cli search --query "person holding a black laptop" --top-k 10
-
-# Search 3: "black desk telephone" (investigates the stationary telephone false-positive track)
 .\.venv\Scripts\python.exe -m src.cli search --query "black desk telephone" --top-k 10
-
-# Optional filters: restrict by camera, detected class, embedding variant ('crop' or 'context'), or JSON output
-.\.venv\Scripts\python.exe -m src.cli search --query "laptop sitting on a wooden desk" --camera-id office_cam_01 --class-name laptop --variant context --top-k 5
-.\.venv\Scripts\python.exe -m src.cli search --query "black laptop" --top-k 5 --json
 ```
 
-### 3. Class-Based Multi-Camera Ingestion, Retrieval & Gap Comparison
-
-```powershell
-# Class-based retrieval report across all indexed cameras
-.\.venv\Scripts\python.exe -m src.cli query --class-name laptop --show-timeline
-
-# Within-camera tracking gap & candidate visual comparison on laptop_test.mp4
-.\.venv\Scripts\python.exe -m src.cli compare-tracks --camera-id office_cam_01 --video laptop_test.mp4 --class-name laptop
-```
-
-### 4. Run Automated Test Suite (24 Tests)
+### 3. Run Automated Test Suite (30 Tests)
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
@@ -104,9 +86,22 @@ Run all commands from `C:\Users\hp\Documents\group8-visual-asset-retrieval` usin
 
 ---
 
+## Requirements for Proper Real-World Two-Camera Evaluation
+
+Synthetic fixtures validate software logic and safeguard rules, **not** real-world cross-camera re-identification accuracy. A credible two-camera experimental evaluation requires:
+1. **Authorized Dual-Camera Recording Setup**: Two physical cameras (e.g., `office_cam_01` and `corridor_cam_02`) recording at `>= 720p` (`1280x720`) and `>= 15–24 FPS` with documented camera placement (non-overlapping or partially overlapping fields of view).
+2. **Synchronized Wall-Clock or Offset Metadata**: Verified NTP wall-clock start times (`--start-time`) or a visual/audio sync clap at recording start (`--time-offset`) so cross-camera transition gaps are measured accurately.
+3. **Pre-Arrival Clean Background Frames**: At least `2–3 seconds` of unobstructed background footage at the start of each recording (`Frame 0`) before the target asset enters the destination area, enabling pre-arrival stationarity (`NCC`) checks.
+4. **Controlled & Distractor Object Protocols**:
+   - Positive transitions: A person carries the target asset from Camera 1 into Camera 2 and places it down.
+   - Distractor objects: A second similar-looking laptop or dark office fixture (e.g., desk phone, binder) already present in Camera 2 or carried simultaneously by another person.
+   - Negative departures: The asset leaves Camera 1 and enters an unmonitored room (never appearing in Camera 2) to test false last-location suppression.
+5. **Independent Ground-Truth Annotations**: Manually logged frame numbers, timestamps, and camera IDs for every true appearance, disappearance, and placement event prior to running retrieval and verification.
+
+---
+
 ## Known Limitations & Boundaries
 
-1. **CLIP Similarity Is Not Calibrated Probability or Physical Identity**: OpenCLIP cosine similarity (typically `0.18–0.34` for `ViT-B-32` image-text pairs) is an uncalibrated relative ranking score. It measures visual/semantic resemblance to the text description, **not** ground-truth verification that two sightings show the exact same physical object.
-2. **Pretrained Detector & Small/Occluded Object Challenges**: OpenCLIP only indexes sightings where the object detector (`YOLO11m` at `conf >= 0.15`) recorded a candidate bounding box and saved evidence. During complete detector blind gaps (such as Frames `111..177` in `laptop_test.mp4` when the laptop is occluded by the employee's torso), no laptop bounding boxes exist to embed, though concurrent `person` tracks (`local_track_2`) remain searchable.
-3. **False-Positive Candidate Disambiguation Requires Multi-Factor Verification**: In `laptop_test.mp4`, `local_track_7` (Frames `178..208`) was triggered on a stationary black desk telephone. While OpenCLIP ranks `local_track_1` highest for `"black laptop"` (`0.3300` vs. `0.2259` for `local_track_7`) and ranks `local_track_7` highest for `"black desk telephone"` (`0.2869`), combining visual embeddings with pre-arrival background stationarity (`NCC`), track stability, and spatiotemporal reasoning remains essential.
-4. **Synchronization Requires Explicit Metadata**: Cross-camera chronological ordering is only performed when `recording_start_utc` (`--start-time`) or `time_offset_seconds` (`--time-offset`) is provided for every compared recording.
+1. **CLIP Similarity Is Not Physical Identity**: Even a stationary desk telephone (`local_track_7`) can have a `0.7955` image-to-image OpenCLIP cosine similarity with a thin closed black laptop (`local_track_1` at Frame `108–110`) because both appear as small dark rectangular slabs at low resolution. Multi-factor verification (combining Frame 0 stationarity `NCC`, HSV color correlation, and track stability) is mandatory to reject false positives.
+2. **Selective Keyframe Sampling (`keyframe_interval=12`)**: During ingestion, evidence images are saved for track first, peak, last strongly supported, last overall, every 12th frame, and all low-confidence frames (`< 0.50`). While this preserves boundary and transition states (`20/111` frames for `local_track_1`) without exhausting disk space, rapid sub-second pose transitions between 12-frame intervals are only captured if they coincide with peak/last milestones or drop below `0.50` confidence.
+3. **Synchronization Requirement**: Cross-camera transition verification returns `INCONCLUSIVE` whenever `recording_start_utc` or `time_offset_seconds` is missing on either recording.

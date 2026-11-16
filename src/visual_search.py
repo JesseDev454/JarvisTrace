@@ -462,6 +462,69 @@ class ChromaVisualIndex:
             metadata={"hnsw:space": "cosine"},
         )
 
+    def close(self, delete_collection_handles: bool = False) -> None:
+        """Explicitly stop the underlying ChromaDB Rust/SQLite system and release OS file handles."""
+        if getattr(self, "_client", None) is None:
+            return
+        if delete_collection_handles:
+            try:
+                self._client.delete_collection(name=self.collection_name)
+            except Exception:
+                pass
+        try:
+            if hasattr(self._client, "_system") and self._client._system is not None:
+                self._client._system.stop()
+        except Exception:
+            pass
+        try:
+            if hasattr(self._client, "clear_system_cache"):
+                self._client.clear_system_cache()
+        except Exception:
+            pass
+        self._collection = None  # type: ignore[assignment]
+        self._client = None  # type: ignore[assignment]
+
+    def __enter__(self) -> "ChromaVisualIndex":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
+
+    def get_embeddings_for_sighting_ids(
+        self,
+        sighting_ids: Sequence[int],
+        model_id: Optional[str] = None,
+    ) -> dict[tuple[int, str], np.ndarray]:
+        """Retrieve persisted L2-normalized embeddings keyed by `(sighting_id, variant)`."""
+        if not sighting_ids or self.count() == 0:
+            return {}
+        int_ids = [int(sid) for sid in sighting_ids]
+        where_clauses: list[dict[str, Any]] = []
+        if len(int_ids) == 1:
+            where_clauses.append({"sighting_id": int_ids[0]})
+        else:
+            where_clauses.append({"sighting_id": {"$in": int_ids}})
+        if model_id:
+            where_clauses.append({"embedding_model_id": str(model_id)})
+
+        where_filter: dict[str, Any] = (
+            where_clauses[0] if len(where_clauses) == 1 else {"$and": where_clauses}
+        )
+        res = self._collection.get(where=where_filter, include=["embeddings", "metadatas"])
+        embs = res.get("embeddings")
+        metas = res.get("metadatas")
+        if embs is None or metas is None:
+            return {}
+
+        out: dict[tuple[int, str], np.ndarray] = {}
+        for emb, meta in zip(embs, metas):
+            if not meta or emb is None:
+                continue
+            sid = int(meta.get("sighting_id", -1))
+            var = str(meta.get("embedding_variant", "crop"))
+            out[(sid, var)] = normalize_embedding_vector(np.asarray(emb, dtype=np.float32))
+        return out
+
     def count(self) -> int:
         return int(self._collection.count())
 

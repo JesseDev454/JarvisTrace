@@ -488,6 +488,103 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit structured JSON statistics report.",
     )
 
+    # 8. verify-candidates subcommand (Milestone 4)
+    ver_p = subparsers.add_parser(
+        "verify-candidates",
+        help="Anchor a reference asset track/sighting and verify candidate tracks across one or more cameras.",
+    )
+    ver_p.add_argument(
+        "--ref-camera-id",
+        default="office_cam_01",
+        help="Reference asset camera ID (default: office_cam_01).",
+    )
+    ver_p.add_argument(
+        "--ref-video",
+        default="laptop_test.mp4",
+        help="Reference asset source video (default: laptop_test.mp4).",
+    )
+    ver_p.add_argument(
+        "--ref-track-id",
+        type=int,
+        default=1,
+        help="Reference camera-local track ID (default: 1).",
+    )
+    ver_p.add_argument(
+        "--ref-scoped-key",
+        default=None,
+        help="Optional explicit reference scoped_track_key (overrides --ref-camera-id/--ref-video/--ref-track-id).",
+    )
+    ver_p.add_argument(
+        "--ref-sighting-id",
+        type=int,
+        default=None,
+        help="Optional explicit SQLite sighting_id to anchor the reference track.",
+    )
+    ver_p.add_argument(
+        "--class-name",
+        default="laptop",
+        help="Target object class name (default: laptop).",
+    )
+    ver_p.add_argument(
+        "--candidate-cameras",
+        nargs="*",
+        default=None,
+        help="Optional camera ID(s) to evaluate candidates from (omit to check all indexed cameras).",
+    )
+    ver_p.add_argument(
+        "--candidate-track-keys",
+        nargs="*",
+        default=None,
+        help="Optional explicit candidate scoped_track_key(s) to evaluate.",
+    )
+    ver_p.add_argument(
+        "--confirmed-conf",
+        type=float,
+        default=0.50,
+        help="Detector confidence threshold for strongly supported tracks (default: 0.50).",
+    )
+    ver_p.add_argument(
+        "--min-track-frames",
+        type=int,
+        default=3,
+        help="Minimum high-confidence frames for strongly supported tracks (default: 3).",
+    )
+    ver_p.add_argument(
+        "--db-path",
+        default="outputs/sightings.db",
+        help="SQLite database path (default: outputs/sightings.db).",
+    )
+    ver_p.add_argument(
+        "--chroma-dir",
+        default="outputs/chroma_db",
+        help="ChromaDB persistence directory (default: outputs/chroma_db).",
+    )
+    ver_p.add_argument(
+        "--collection",
+        default="sighting_visual_embeddings",
+        help="ChromaDB collection name (default: sighting_visual_embeddings).",
+    )
+    ver_p.add_argument(
+        "--clip-model",
+        default="ViT-B-32",
+        help="OpenCLIP model architecture (default: ViT-B-32).",
+    )
+    ver_p.add_argument(
+        "--clip-pretrained",
+        default="laion2b_s34b_b79k",
+        help="OpenCLIP pretrained weights tag (default: laion2b_s34b_b79k).",
+    )
+    ver_p.add_argument(
+        "--device",
+        default=None,
+        help="Compute device override (default: cuda if available, else cpu).",
+    )
+    ver_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit structured JSON verification report.",
+    )
+
     return parser
 
 
@@ -715,6 +812,53 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(stats, indent=2))
             return 0
         print(format_index_stats_text(stats))
+        return 0
+
+    if args.command == "verify-candidates":
+        from src.verification import (
+            build_reference_asset_anchor,
+            format_verification_report_text,
+            verify_candidates_against_reference,
+        )
+        from src.visual_search import ChromaVisualIndex, OpenCLIPEmbedder
+
+        store = SightingStore(db_path=args.db_path, jsonl_path=None)
+        index = ChromaVisualIndex(persist_dir=args.chroma_dir, collection_name=args.collection)
+        encoder = OpenCLIPEmbedder.get_instance(
+            model_name=args.clip_model,
+            pretrained=args.clip_pretrained,
+            device=args.device,
+        )
+        cand_cams = _parse_camera_list(args.candidate_cameras)
+        cand_keys = _parse_camera_list(args.candidate_track_keys)
+
+        ref_anchor = build_reference_asset_anchor(
+            store=store,
+            camera_id=args.ref_camera_id,
+            source_video=args.ref_video,
+            local_track_id=args.ref_track_id,
+            scoped_track_key=args.ref_scoped_key,
+            sighting_id=args.ref_sighting_id,
+            query_class=args.class_name,
+            confirmed_conf_threshold=args.confirmed_conf,
+            confirmed_min_track_frames=args.min_track_frames,
+            visual_index=index,
+            encoder=encoder,
+        )
+        ver_report = verify_candidates_against_reference(
+            store=store,
+            reference_anchor=ref_anchor,
+            candidate_camera_ids=cand_cams if cand_cams else None,
+            candidate_track_keys=cand_keys if cand_keys else None,
+            confirmed_conf_threshold=args.confirmed_conf,
+            confirmed_min_track_frames=args.min_track_frames,
+            visual_index=index,
+            encoder=encoder,
+        )
+        if args.json:
+            print(json.dumps(ver_report.to_dict(), indent=2))
+            return 0
+        print(format_verification_report_text(ver_report))
         return 0
 
     return 1

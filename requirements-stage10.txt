@@ -1,0 +1,8 @@
+# Additional Stage 10 dependencies on top of the existing root environment.
+# These exact versions were already installed and used for verification.
+# No installation or upgrade was performed during Stage 10 development.
+psycopg[binary]==3.3.8
+pgvector==0.5.1
+python-dotenv==1.2.4
+SQLAlchemy==2.1.8
+alembic==1.20.1

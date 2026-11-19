@@ -1,4 +1,4 @@
-> Current project: **Text-Guided Surveillance Video Retrieval for Portable Objects**. Start with the [project audit](docs/PROJECT_AUDIT.md), [architecture](docs/ARCHITECTURE.md), and [Stage 9 review guide](docs/STAGE9_REVIEW.md). The legacy CLI and verification experiments below are preserved historical work; the removed verification module is not part of the current application plan.
+> Current project: **Text-Guided Surveillance Video Retrieval for Portable Objects**. Start with the [project audit](docs/PROJECT_AUDIT.md), [architecture](docs/ARCHITECTURE.md), [Stage 9 review guide](docs/STAGE9_REVIEW.md), and [Stage 10 PostgreSQL visual search](docs/STAGE10.md). The legacy CLI and verification experiments below are preserved historical work; the removed verification module is not part of the current application plan.
 
 # Group 8 — Evidence-Guided Multi-Camera Visual Asset Retrieval System
 

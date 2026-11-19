@@ -146,5 +146,3 @@ class OpenCLIPEmbedder:
             text_feat = text_feat / text_feat.norm(dim=-1, keepdim=True).clamp(min=1e-12)
             vec = text_feat[0].detach().cpu().to(torch.float32).numpy()
         return normalize_embedding_vector(vec)
-
-

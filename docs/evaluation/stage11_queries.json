@@ -1,0 +1,11 @@
+{
+  "purpose": "Diagnostic comparisons on one synthetic clip; no relevance ground truth or accuracy claims",
+  "queries": [
+    {"category": "appearance", "query": "a black backpack on a wooden desk"},
+    {"category": "initial context", "query": "a black backpack resting on a chair"},
+    {"category": "movement", "query": "a black backpack was moved from a chair to a desk"},
+    {"category": "action", "query": "a person carrying a backpack"},
+    {"category": "other object", "query": "a blue water bottle on a desk"},
+    {"category": "negative", "query": "a red suitcase in a corridor"}
+  ]
+}

@@ -78,6 +78,12 @@ class IndexingTests(unittest.TestCase):
             self.run_index(tracking_report=tracking)
         self.assertEqual(self.index.rows,[])
 
+    def test_rejects_recording_bytes_that_differ_from_the_queued_source_hash(self):
+        expected=hashlib.sha256(b'other footage').hexdigest()
+        with self.assertRaisesRegex(ValueError,'queued source hash'):
+            self.run_index(expected_source_sha256=expected)
+        self.assertEqual(self.index.rows,[])
+
     def test_crops_come_from_original_pixels_with_detector_provenance(self):
         tracking = self.root/'analysis.json'
         source = hashlib.sha256(self.video.read_bytes()).hexdigest()

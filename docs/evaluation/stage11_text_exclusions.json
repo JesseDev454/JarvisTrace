@@ -1,0 +1,12 @@
+{
+  "format": "group8-reviewed-text-exclusions-v1",
+  "exclusions": [
+    {
+      "video_id": "test01_863e5601e3b5",
+      "scene_id": 9,
+      "description_sha256": "5b3d712c6b31db85c5f87eb6104e73a630cd28413aee283ffe25cdeeb5c7ea85",
+      "reason": "Known placement contradiction: the label says chair at 4 seconds; existing reviewed frames and STAGE7_GROUND_TRUTH show the backpack on the desk.",
+      "reference": "scene-search-prototype/STAGE7_GROUND_TRUTH.json, window 1; saved frame at 4 seconds"
+    }
+  ]
+}

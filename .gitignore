@@ -16,6 +16,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+node_modules/
 
 # Model weights
 *.pt
@@ -26,6 +27,10 @@ build/
 datasets/
 runs/
 outputs/
+mediamtx/recordings/
+mediamtx.exe
+auto.crt
+auto.key
 scene-search-prototype/data/
 *.sqlite3
 *.sqlite3-*

@@ -112,7 +112,7 @@ class VisualIndex:
                 count(*) FILTER(WHERE variant='crop') AS crops FROM visual_embeddings''').fetchone()
 
     def search(self,vector,encoder_key,*,limit=10,camera_id=None,video_id=None,
-               start_seconds=None,end_seconds=None,variant=None):
+               start_seconds=None,end_seconds=None,variant=None,camera_ids=None):
         if type(limit) is not int or not 1<=limit<=100:
             raise ValueError('Result limit must be 1..100')
         for value in (start_seconds,end_seconds):
@@ -123,6 +123,12 @@ class VisualIndex:
         if variant not in (None,'frame','crop'):
             raise ValueError('Unknown visual variant')
         conditions,params = ['v.encoder_key=%s','v.source_camera_id IS NOT NULL'],[normalize_visual_vector(vector),encoder_key]
+        if camera_ids is not None:
+            if not isinstance(camera_ids,(list,tuple)) or any(not isinstance(v,str) for v in camera_ids):
+                raise ValueError('Camera scope must be a list of camera IDs')
+            if not camera_ids:
+                return []
+            conditions.append('v.source_camera_id=ANY(%s)');params.append(list(camera_ids))
         for expression,value in [('v.source_camera_id=%s',camera_id),('v.video_id=%s',video_id),
                                  ('v.timestamp_seconds >= %s',start_seconds),('v.timestamp_seconds < %s',end_seconds),('v.variant=%s',variant)]:
             if value is not None:
@@ -130,7 +136,7 @@ class VisualIndex:
         params.append(limit)
         query = '''WITH q AS (SELECT %s::vector AS embedding), ranked AS (
             SELECT v.id,v.video_id,v.source_camera_id AS camera_id,v.source_video_path,
-                v.source_sha256,v.frame_index,v.timestamp_seconds,v.variant,v.bbox_xyxy,
+                v.source_sha256,v.source_duration_seconds AS duration_seconds,v.frame_index,v.timestamp_seconds,v.variant,v.bbox_xyxy,
                 v.image_path,v.image_sha256,v.embedding_model,v.encoder_key,v.crop_provenance,
                 1-(v.embedding <=> q.embedding) AS similarity,
                 row_number() OVER(PARTITION BY v.video_id,v.source_sha256,v.frame_index

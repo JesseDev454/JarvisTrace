@@ -79,7 +79,8 @@ def _tracking_rows(path,video_id,camera_id,source_hash,metadata):
 
 
 def index_recording(video_id,*,every_seconds=1.0,max_frames=300,batch_size=8,
-                    tracking_report=None,output_root=Path('outputs/stage10'),encoder=None,index=None):
+                    tracking_report=None,output_root=Path('outputs/stage10'),encoder=None,index=None,
+                    expected_source_sha256=None):
     import cv2
     from PIL import Image
     if (not math.isfinite(every_seconds) or every_seconds<=0 or type(max_frames) is not int
@@ -91,6 +92,8 @@ def index_recording(video_id,*,every_seconds=1.0,max_frames=300,batch_size=8,
     if not source.is_file():
         raise FileNotFoundError('Registered source video is missing')
     digest = _file_hash(source)
+    if expected_source_sha256 is not None and digest != expected_source_sha256:
+        raise ValueError('Source bytes differ from the queued source hash')
     cap = cv2.VideoCapture(str(source.resolve()))
     samples,frame_count,observed_frames = [],0,0
     started = time.perf_counter()

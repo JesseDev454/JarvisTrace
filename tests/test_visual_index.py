@@ -76,7 +76,7 @@ class PostgresVisualIndexTests(unittest.TestCase):
         migrate(schema=self.schema)
         with open_database(schema=self.schema, readonly=True) as c:
             self.assertEqual(c.execute('SELECT md5(row_to_json(s)::text) AS digest FROM scenes s').fetchone()['digest'], self.original)
-            self.assertEqual(c.execute('SELECT version_num FROM alembic_version').fetchone()['version_num'], '0003_visual_source_snapshot')
+            self.assertEqual(c.execute('SELECT version_num FROM alembic_version').fetchone()['version_num'], '0005_indexed_coverage_only')
             self.assertEqual(c.execute("SELECT format_type(atttypid,atttypmod) AS t FROM pg_attribute WHERE attrelid='visual_embeddings'::regclass AND attname='embedding'").fetchone()['t'], 'vector(512)')
 
     def test_idempotent_insert_and_source_replacement_rejection(self):

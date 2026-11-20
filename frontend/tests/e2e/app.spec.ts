@@ -107,11 +107,14 @@ async function installApiMocks(page: Page) {
   await page.route('**/api/search', (route) => fulfillSearch(route, { results: [match] }));
 }
 
-async function fulfillSearch(route: Route, result: { results: unknown[] }) {
+async function fulfillSearch(route: Route, result: { results: unknown[]; result_status?: 'matches' | 'no_strong_match' | 'no_candidates' }) {
   return route.fulfill({ json: {
     query: 'dark bag resting on a bench',
     mode: 'hybrid',
     candidate_counts: { visual: result.results.length, text: 0 },
+    result_status: result.result_status ?? (result.results.length ? 'matches' : 'no_candidates'),
+    raw_window_counts: { visual: result.results.length, text: 0, hybrid: result.results.length },
+    accepted_window_counts: { visual: result.results.length, text: 0, hybrid: result.results.length },
     limitations: 'Ranked candidates only; results do not establish presence or absence.',
     results: result.results,
   } });
@@ -197,9 +200,19 @@ test('shows a distinct loading state, then offers a clear action for no matches'
   } finally {
     releaseSearch();
   }
-  await expect(page.getByRole('heading', { name: /no clips in this time range/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /no indexed candidates for this search/i })).toBeVisible();
   await expect(page.getByLabel('Describe what you are looking for')).toHaveValue('a red umbrella');
   await expect(page.getByRole('button', { name: /clear filters/i })).toBeVisible();
+});
+
+test('explains when indexed candidates do not clear the relevance check', async ({ page }) => {
+  await page.route('**/api/search', (route) => fulfillSearch(route, {
+    results: [], result_status: 'no_strong_match',
+  }));
+  await page.getByLabel('Describe what you are looking for').fill('a red suitcase');
+  await page.getByRole('button', { name: 'Search footage' }).click();
+  await expect(page.getByRole('heading', { name: /no strong match found/i })).toBeVisible();
+  await expect(page.getByText(/does not establish that the item was absent/i)).toBeVisible();
 });
 
 test('keeps the search form available after an API error', async ({ page }) => {
@@ -360,7 +373,7 @@ test('captures and checks accessibility for the approved screen states', async (
   } finally {
     releaseLoadingSearch();
   }
-  await expect(page.getByRole('heading', { name: /no clips in this time range/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /no indexed candidates for this search/i })).toBeVisible();
   await capture('03-search-empty');
 
   await setSearch((route) => route.fulfill({ status: 503, json: { detail: 'Search is offline.' } }));

@@ -51,6 +51,9 @@ export interface SearchResponse {
   query: string;
   mode: string;
   results: Candidate[];
+  result_status: 'matches' | 'no_strong_match' | 'no_candidates';
+  raw_window_counts: Record<string, number>;
+  accepted_window_counts: Record<string, number>;
   candidate_counts: { visual: number; text: number };
   limitations: string;
 }

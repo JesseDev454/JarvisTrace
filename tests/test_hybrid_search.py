@@ -1,7 +1,7 @@
 """Hand-calculated window/fusion cases without models or databases."""
 import unittest
 
-from src.hybrid_search import fuse_windows
+from src.hybrid_search import filter_windows_by_similarity, fuse_windows
 
 
 def visual(t,video='a',camera='CAM',sha='a'*64,similarity=.5):
@@ -18,6 +18,32 @@ def text(start,end,**kwargs):
 
 
 class FusionTests(unittest.TestCase):
+    def test_similarity_gate_requires_a_qualified_enabled_channel(self):
+        rows = fuse_windows(
+            [visual(1, similarity=.30)], [text(0, 4, similarity=.46)],
+            window_seconds=4,
+        )
+        self.assertEqual(len(filter_windows_by_similarity(
+            rows, mode='hybrid', min_visual_similarity=.28, min_text_similarity=.47,
+        )), 1)
+        self.assertEqual(filter_windows_by_similarity(
+            rows, mode='hybrid', min_visual_similarity=.31, min_text_similarity=.47,
+        ), [])
+        self.assertEqual(filter_windows_by_similarity(
+            rows, mode='text', min_visual_similarity=.28, min_text_similarity=.47,
+        ), [])
+        self.assertEqual(len(filter_windows_by_similarity(
+            rows, mode='text', min_visual_similarity=.28, min_text_similarity=.45,
+        )), 1)
+
+    def test_similarity_gate_rejects_invalid_thresholds_and_preserves_order(self):
+        rows = fuse_windows([visual(1, similarity=.3), visual(5, similarity=.5)], [])
+        accepted = filter_windows_by_similarity(rows, mode='visual', min_visual_similarity=.25)
+        self.assertEqual([row['start_seconds'] for row in accepted], [0, 4])
+        for value in (float('nan'), float('inf'), -1.01, 1.01, True):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                filter_windows_by_similarity(rows, mode='visual', min_visual_similarity=value)
+
     def test_one_vote_per_channel_window_and_exact_rrf(self):
         rows=fuse_windows([visual(1),visual(2),visual(5)],[text(0,4)],window_seconds=4,rrf_k=60)
         self.assertEqual([(r['start_seconds'],r['end_seconds']) for r in rows],[(0,4),(4,8)])

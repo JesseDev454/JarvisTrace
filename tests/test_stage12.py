@@ -74,6 +74,27 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(self.calls[0][0],'bag')
         self.assertEqual(self.calls[0][1]['text_weight'],0)
         self.assertEqual(self.calls[0][1]['start_seconds'],4)
+        self.assertEqual(r.json()['result_status'],'matches')
+
+    def test_search_reports_no_strong_match_separately_from_no_candidates(self):
+        from unittest.mock import patch
+        received={}
+        def weak_search(query,**kwargs):
+            received.update(kwargs)
+            return dict(comparison={'hybrid':[]},raw_window_counts={'hybrid':3},
+                        limitations='ranked',candidate_counts={'visual':20,'text':0},
+                        text_diagnostics={})
+        with patch.dict('os.environ',{
+            'JARVISTRACE_MIN_VISUAL_SIMILARITY':'0.28',
+            'JARVISTRACE_MIN_TEXT_SIMILARITY':'0.47',
+        }), self.make_client(weak_search) as client:
+            response=client.post('/api/search',json={'query':'a blue case'})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json()['result_status'],'no_strong_match')
+        self.assertEqual(response.json()['results'],[])
+        self.assertEqual(response.json()['raw_window_counts']['hybrid'],3)
+        self.assertEqual(received['min_visual_similarity'],.28)
+        self.assertEqual(received['min_text_similarity'],.47)
 
     def test_ranges_head_invalid_ranges_and_unknown_ids(self):
         item=self.client.get('/api/recordings').json()['recordings'][0]
@@ -146,3 +167,4 @@ class PlaybackTests(unittest.TestCase):
             finally:
                 release.set();worker.join(5)
             self.assertEqual(responses[0].json()['results'],[])
+            self.assertEqual(responses[0].json()['result_status'],'no_candidates')

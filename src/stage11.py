@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import uuid
 
-from src.hybrid_search import fuse_windows
+from src.hybrid_search import filter_windows_by_similarity, fuse_windows
 from src.reviewed_text import ReviewedTextIndex, embed_text
 from src.stage10 import _encoder, _identity
 from src.visual_index import VisualIndex
@@ -16,6 +16,7 @@ from src.visual_index import VisualIndex
 def search(query, *, camera_id=None, video_id=None, start_seconds=None,
            end_seconds=None, window_seconds=4, rrf_k=60, visual_weight=1,
            text_weight=1, limit=10, candidate_limit=100, variant=None,camera_ids=None,
+           min_visual_similarity=None, min_text_similarity=None,
            encoder=None, visual_index=None, text_index=None, text_embedder=None):
     if not isinstance(query,str) or not query.strip() or len(query)>1000:
         raise ValueError('Query must contain 1..1000 characters')
@@ -24,6 +25,8 @@ def search(query, *, camera_id=None, video_id=None, start_seconds=None,
     settings=dict(window_seconds=window_seconds,rrf_k=rrf_k,visual_weight=visual_weight,
                   text_weight=text_weight,start_seconds=start_seconds,end_seconds=end_seconds,limit=limit)
     fuse_windows([],[],**settings)  # Validate before loading encoders.
+    filter_windows_by_similarity([],mode='hybrid',min_visual_similarity=min_visual_similarity,
+                                 min_text_similarity=min_text_similarity)
     filters=dict(camera_id=camera_id,video_id=video_id,start_seconds=start_seconds,end_seconds=end_seconds)
     if camera_ids is not None:
         camera_ids=sorted(set(camera_ids))
@@ -40,16 +43,26 @@ def search(query, *, camera_id=None, video_id=None, start_seconds=None,
         descriptions=(text_index or ReviewedTextIndex()).search(
                     (text_embedder or embed_text)(query.strip()),limit=candidate_limit,**filters)
     texts=descriptions['results']
-    comparisons=dict(visual=fuse_windows(images,[],**settings),
-                     text=fuse_windows([],texts,**settings),
-                     hybrid=fuse_windows(images,texts,**settings))
+    candidate_settings=dict(settings,limit=100)
+    raw_comparisons=dict(visual=fuse_windows(images,[],**candidate_settings),
+                         text=fuse_windows([],texts,**candidate_settings),
+                         hybrid=fuse_windows(images,texts,**candidate_settings))
+    raw_window_counts={mode:len(rows) for mode,rows in raw_comparisons.items()}
+    accepted_comparisons={mode:filter_windows_by_similarity(
+                              rows,mode=mode,min_visual_similarity=min_visual_similarity,
+                              min_text_similarity=min_text_similarity)
+                          for mode,rows in raw_comparisons.items()}
+    window_counts={mode:len(rows) for mode,rows in accepted_comparisons.items()}
+    comparisons={mode:rows[:limit] for mode,rows in accepted_comparisons.items()}
     return dict(report_format='group8-stage11-search-v1',query=query.strip(),
-                settings=dict(settings,candidate_limit=candidate_limit,variant=variant,**{
+                settings=dict(settings,candidate_limit=candidate_limit,variant=variant,
+                    min_visual_similarity=min_visual_similarity,min_text_similarity=min_text_similarity,**{
                     k:v for k,v in filters.items() if k not in settings}),
                 results=comparisons['hybrid'],comparison=comparisons,
+                raw_window_counts=raw_window_counts,window_counts=window_counts,
                 candidate_counts=dict(visual=len(images),text=len(texts)),
                 text_diagnostics={k:v for k,v in descriptions.items() if k!='results'},
-                limitations='RRF is a ranking score, not confidence. Similarity always returns candidates, including negative queries. Legacy labels may be inaccurate; no action or absence guarantee.')
+                limitations='RRF and channel similarity are ranking evidence, not confidence. Configured thresholds are heuristics and do not prove presence or absence. Legacy labels may be inaccurate; no action or absence guarantee.')
 
 
 def main():

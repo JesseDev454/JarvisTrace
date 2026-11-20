@@ -212,13 +212,14 @@ authorized physical-camera test.
 
 ## Local verification status
 
-Verification was performed on 2026-11-19 against the local Windows setup. The simulation remained on loopback; this does not commission a physical CCTV camera.
+The MediaMTX acceptance evidence below was captured on 2026-11-19 against the local Windows setup. The full automated suites were rerun on 2026-11-20 after the crop/model comparison was documented. The simulation remained on loopback; this does not commission a physical CCTV camera.
 
 ### Environment and database
 
 - MediaMTX v1.21.3, FFmpeg/FFprobe 9.0.2, Python 3.13.17, Node.js 24.20.0, npm 11.19.0, and PostgreSQL 17.12 with pgvector were used.
 - PostgreSQL database `group8_fyp` accepted the configured application role. Alembic is at `0005_indexed_coverage_only`. The migration was applied twice; the second run made no schema changes. A backup was taken before migrating the existing project database.
 - The PostgreSQL integration suite executed against the real database: **214 passed, 88 subtests passed** in 107.03 seconds. The CFR ingestion regression tests also passed, including acceptance of a timestamp-uniform MP4 with small fMP4 average-rate rounding and rejection of a clip with a terminal frame gap.
+- Full Python suite rerun on 2026-11-20 with `GROUP8_TEST_POSTGRES=1` and the project `PYTHONPATH`: **219 passed, 93 subtests passed** in 115.78 seconds. This supersedes the earlier test count above; the integration run exercised the configured local PostgreSQL test database.
 - The database has 21 MediaMTX jobs, all `ready`: 20 for `CAM-TEST` and one restricted-camera fixture. There are also 1,129 `CAM-TEST` and 61 restricted-fixture visual embedding rows. The pre-existing `test01` recording remains as a separate legacy row.
 
 ### MediaMTX capture and recovery
@@ -241,11 +242,53 @@ Retrieval settings stayed fixed: 4-second windows, RRF `k=60`, visual/text weigh
 - `q02` (dark bag on a bench) in `1795119642-605566.mp4` returned an overlapping candidate at 8–12 seconds. The production playback element sought to the candidate and stopped at the candidate window end.
 - The human-verified absent query `q04` returned 10 candidates in each of `1795118729-820657.mp4` and `1795119642-605566.mp4`. These are false-positive suggestions. The interface labels them “Possible matches” and says ranked candidates are not proof of presence or absence.
 
+#### Optional similarity cutoffs
+
+Stage 12 accepts optional `JARVISTRACE_MIN_VISUAL_SIMILARITY` and
+`JARVISTRACE_MIN_TEXT_SIMILARITY` settings in the local `.env`. Each value must
+be a finite cosine similarity from -1 to 1. When both are unset, searches keep
+the existing ranked-candidate behavior. When a cutoff is set, a window must
+clear at least one configured channel cutoff; hybrid ranking still orders
+eligible windows by reciprocal rank fusion. An unconfigured channel does not
+qualify a window once either cutoff is active. The API reports `matches`,
+`no_strong_match`, or `no_candidates`, plus raw and accepted window counts.
+The investigator screen explains the difference without claiming an item was
+absent.
+
+No cutoff is enabled by default. The live-index query check produced top visual
+similarities of 0.326 for “dark backpack”, 0.255 for “dark bag on a bench”, and
+0.271 for “blue handled case”. The reviewed-text channel returned a caption
+about a backpack sitting on a chair at 0.477 for the bench query; the blue-case
+query scored 0.468 against a backpack caption. The near scores and wrong-place
+caption show that these checks do not establish a safe cutoff. Keep thresholds
+unset until a source-disjoint calibration and held-out evaluation show
+acceptable positive retention and fewer negative returns. Similarity is
+ranking evidence, not a probability or proof of presence.
+
+No new model was installed. A larger image-text encoder needs a measured
+comparison against frozen ViT-B/32 on reviewed held-out queries before
+replacement; all indexed vectors must be rebuilt with a single encoder if the
+model changes.
+
+#### Isolated detector-crop comparison (2026-11-20)
+
+An isolated comparison copied 105 source-matched full-frame embeddings into a
+private baseline schema and added 65 YOLO11n crops in a separate schema. The
+public index snapshot stayed unchanged. On the clip 05 backpack miss, the
+relevant interval moved from outside the top 10 to rank 8, but Hit@5 remained
+zero and the leading crop evidence was detector-labelled `laptop`; this is not
+a verified retrieval recovery. Both q04 negative searches still returned 10
+candidates, and the top cosine rose from 0.2154 to 0.2752 on clip 05 and from
+0.1705 to 0.2743 on clip 06. Keep the production index and retrieval settings
+unchanged. The detailed method, per-case results, evidence hashes, and larger
+encoder download blocker are in
+[`docs/evaluation/CAMTEST_CROP_MODEL_COMPARISON_2026-11-20.md`](evaluation/CAMTEST_CROP_MODEL_COMPARISON_2026-11-20.md).
+
 A temporary investigator session assigned only to `CAM-TEST` saw no restricted-camera recordings. A search forced to `CAM-RESTRICTED` and direct access to its media both returned HTTP 403. Positive searches through that scoped API session returned only authorized `CAM-TEST` candidates. The live production browser remained in the administrator session; completing the investigator sign-in and search flow in a browser is still outstanding.
 
 ### Frontend verification
 
-`npm ci` and `npm run build` passed; the build ran the TypeScript check. The full Playwright suite passed **24 tests with 2 expected Firefox skips** using the workstation’s cached Chromium revision 1208 and installed Firefox. The two Chromium-only screenshot/accessibility checks skip in Firefox. Playwright’s pinned Chromium revision 1243 was not available; three CDN download attempts timed out. The coverage-gap regression then passed in both Chromium 1208 and Firefox after verifying the long gap and reconnect gap. Its test-fixture screenshot is `outputs/implementation/live-acceptance/coverage-gaps-ui.png`.
+`npm ci` and `npm run build` passed in the earlier acceptance run; the production build runs the TypeScript check. The full Playwright suite was rerun on 2026-11-20 with the installed Chrome executable and Firefox: **26 passed, 2 expected Firefox skips**. The skips are the Chromium-only phone screenshot/accessibility checks. The coverage-gap regression passed in both browsers after verifying the long gap and reconnect gap. Its test-fixture screenshot is `outputs/implementation/live-acceptance/coverage-gaps-ui.png`.
 
 The production bundle served by FastAPI was opened in the local browser as an administrator. Its search page showed the two measured `CAM-TEST` intervals (about 12m 47s and 1m 26s) with the caveat that timestamps do not confirm continuous capture. The screenshot above is a browser-test preview using those same measured intervals; it is not a capture of the authenticated production database page.
 

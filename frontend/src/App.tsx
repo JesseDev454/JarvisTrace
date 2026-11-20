@@ -5,6 +5,7 @@ import type { Camera, Candidate, EvaluationSummary, Job, Recording, Role, Search
 type Screen = 'search' | 'recordings' | 'import' | 'processing' | 'users' | 'cameras' | 'about' | 'evaluation';
 type AuthMode = 'loading' | 'login' | 'setup';
 type SearchPhase = 'idle' | 'loading' | 'results' | 'empty' | 'error';
+type EmptySearchStatus = 'no_strong_match' | 'no_candidates';
 
 interface SessionPayload { user: User | null; setup_required?: boolean }
 
@@ -154,7 +155,7 @@ function TopBar({ user, screen, navigate, signOut }: { user: User; screen: Scree
 function SearchPage({
   recordings, phase, results, selected, query, setQuery, camera, setCamera, videoId, setVideoId,
   startText, setStartText, endText, setEndText, error, setError, busy, onSearch, onClear, onSelect,
-  playerError, clearPlayerError, onPlaybackError,
+  playerError, clearPlayerError, onPlaybackError, emptyResultStatus,
 }: {
   recordings: Recording[]; phase: SearchPhase; results: Candidate[]; selected: Candidate | null;
   query: string; setQuery: (value: string) => void; camera: string; setCamera: (value: string) => void;
@@ -162,6 +163,7 @@ function SearchPage({
   endText: string; setEndText: (value: string) => void; error: string; setError: (value: string) => void;
   busy: boolean; onSearch: (event: FormEvent<HTMLFormElement>) => void; onClear: () => void;
   onSelect: (candidate: Candidate) => void; playerError: boolean; clearPlayerError: () => void; onPlaybackError: () => void;
+  emptyResultStatus: EmptySearchStatus;
 }) {
   const cameraIds = useMemo(() => Array.from(new Set(recordings.map((row) => row.camera_id))).sort(), [recordings]);
   const coverageGaps = useMemo(() => measuredCoverageGaps(recordings), [recordings]);
@@ -223,7 +225,7 @@ function SearchPage({
       {error && <p role="alert" className="notice notice-error search-notice">{error}</p>}
       {phase === 'loading' && <div className="state-panel loading-panel" role="status" aria-live="polite"><span className="spinner" aria-hidden="true" />Searching indexed recordings…</div>}
       {phase === 'idle' && <section className="welcome-panel"><div className="welcome-icon" aria-hidden="true">⌕</div><h2>Start with what you remember</h2><p>Use ordinary descriptions such as “a person carrying a blue case”. Choose a camera or time range if you know it.</p><span className="privacy-note"><span className="privacy-dot" />Search stays on this workstation</span></section>}
-      {phase === 'empty' && <section className="state-panel empty-panel"><div className="state-icon" aria-hidden="true">◌</div><h2>No clips in this time range</h2><p>Try another description, widen the time range, or clear the filters. No result only means no indexed candidates matched these settings.</p><button type="button" className="button button-secondary" onClick={onClear}>Clear filters</button></section>}
+      {phase === 'empty' && <section className="state-panel empty-panel"><div className="state-icon" aria-hidden="true">◌</div><h2>{emptyResultStatus === 'no_strong_match' ? 'No strong match found' : 'No indexed candidates for this search'}</h2><p>{emptyResultStatus === 'no_strong_match' ? 'The indexed footage produced candidates, but none met the configured relevance check. This does not establish that the item was absent.' : 'No indexed candidates matched this description and these filters. This does not establish that the item was absent.'}</p><button type="button" className="button button-secondary" onClick={onClear}>Clear filters</button></section>}
       {phase === 'results' && <section className="results-layout" aria-label="Search results and playback">
         <div className="results-column">
           <div className="section-heading"><div><p className="eyebrow">REVIEW EACH CLIP</p><h2>Possible matches</h2></div><span className="result-count">{results.length} candidate{results.length === 1 ? '' : 's'}</span></div>
@@ -428,6 +430,7 @@ function App() {
   const [query, setQuery] = useState(''); const [camera, setCamera] = useState(''); const [videoId, setVideoId] = useState('');
   const [startText, setStartText] = useState(''); const [endText, setEndText] = useState('');
   const [phase, setPhase] = useState<SearchPhase>('idle'); const [results, setResults] = useState<Candidate[]>([]); const [selected, setSelected] = useState<Candidate | null>(null);
+  const [emptyResultStatus, setEmptyResultStatus] = useState<EmptySearchStatus>('no_candidates');
   const [formError, setFormError] = useState(''); const [searchBusy, setSearchBusy] = useState(false);
   const [playerError, setPlayerError] = useState(false); const [importMessage, setImportMessage] = useState('');
   const [evaluation, setEvaluation] = useState<EvaluationSummary | null>(null);
@@ -514,7 +517,9 @@ function App() {
     try {
       const payload = await requestJSON<SearchResponse>('/api/search', { method: 'POST', body: JSON.stringify(body), signal: controller.signal });
       if (controller.signal.aborted || requestId.current !== controller) return;
-      setResults(payload.results); setPhase(payload.results.length ? 'results' : 'empty');
+      setResults(payload.results);
+      setEmptyResultStatus(payload.result_status === 'no_strong_match' ? 'no_strong_match' : 'no_candidates');
+      setPhase(payload.results.length ? 'results' : 'empty');
     } catch (cause) {
       if (controller.signal.aborted || requestId.current !== controller) return;
       setPhase('error');
@@ -526,7 +531,7 @@ function App() {
 
   function clearSearch() {
     requestId.current?.abort(); setQuery(''); setCamera(''); setVideoId(''); setStartText(''); setEndText('');
-    setFormError(''); setPhase('idle'); setResults([]); setSelected(null); setSearchBusy(false); setPlayerError(false);
+    setFormError(''); setPhase('idle'); setResults([]); setSelected(null); setEmptyResultStatus('no_candidates'); setSearchBusy(false); setPlayerError(false);
   }
 
   async function signOut() {
@@ -562,7 +567,7 @@ function App() {
 
   return <div className="app-shell">
     <TopBar user={user} screen={screen} navigate={openScreen} signOut={() => { void signOut(); }} />
-    {screen === 'search' && <SearchPage recordings={recordings} phase={phase} results={results} selected={selected} query={query} setQuery={setQuery} camera={camera} setCamera={setCamera} videoId={videoId} setVideoId={setVideoId} startText={startText} setStartText={setStartText} endText={endText} setEndText={setEndText} error={formError} setError={setFormError} busy={searchBusy} onSearch={(event) => { void submitSearch(event); }} onClear={clearSearch} onSelect={onSelect} playerError={playerError} clearPlayerError={() => setPlayerError(false)} onPlaybackError={() => setPlayerError(true)} />}
+    {screen === 'search' && <SearchPage recordings={recordings} phase={phase} results={results} selected={selected} query={query} setQuery={setQuery} camera={camera} setCamera={setCamera} videoId={videoId} setVideoId={setVideoId} startText={startText} setStartText={setStartText} endText={endText} setEndText={setEndText} error={formError} setError={setFormError} busy={searchBusy} onSearch={(event) => { void submitSearch(event); }} onClear={clearSearch} onSelect={onSelect} playerError={playerError} clearPlayerError={() => setPlayerError(false)} onPlaybackError={() => setPlayerError(true)} emptyResultStatus={emptyResultStatus} />}
     {managementScreens.includes(screen) && isAdmin && <main className="page-wrap management-page"><div className="page-heading"><div><p className="eyebrow">ADMINISTRATION</p><h1>Manage recordings</h1></div><p className="heading-note">Keep the footage library, cameras, and access ready for investigators.</p></div><ManagementTabs screen={screen} navigate={openScreen} />
       {screen === 'recordings' && <RecordingsPage recordings={recordings} loading={listLoading} error={listError} navigate={openScreen} />}
       {screen === 'import' && <ImportPage cameras={cameras} onImported={(message) => { setImportMessage(message); openScreen('processing'); }} />}

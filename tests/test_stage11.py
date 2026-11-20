@@ -42,3 +42,29 @@ class SearchTests(unittest.TestCase):
         with patch('src.stage11._identity',return_value='key'), patch('src.stage11.embed_text',side_effect=AssertionError('disabled')):
             result=search('bag',text_weight=0,encoder=Encoder(),visual_index=Images())
         self.assertEqual(result['candidate_counts']['text'],0)
+
+    def test_similarity_floors_filter_before_result_limit_and_report_raw_window_counts(self):
+        class Encoder:
+            def encode_text(self, query): return [1]
+        class Images:
+            def search(self, *args, **kwargs):
+                return [visual(1,similarity=.30),visual(5,similarity=.50)]
+        with patch('src.stage11._identity',return_value='key'):
+            result=search('bag',encoder=Encoder(),visual_index=Images(),
+                          text_weight=0,limit=1,min_visual_similarity=.40)
+        self.assertEqual(result['raw_window_counts']['visual'],2)
+        self.assertEqual(result['window_counts']['visual'],1)
+        self.assertEqual(len(result['comparison']['visual']),1)
+        self.assertEqual(result['comparison']['visual'][0]['start_seconds'],4)
+        self.assertEqual(result['results'][0]['start_seconds'],4)
+
+    def test_unconfigured_similarity_floors_keep_research_rankings_unchanged(self):
+        class Encoder:
+            def encode_text(self, query): return [1]
+        class Images:
+            def search(self, *args, **kwargs): return [visual(1,similarity=.10)]
+        with patch('src.stage11._identity',return_value='key'):
+            result=search('bag',encoder=Encoder(),visual_index=Images(),text_weight=0)
+        self.assertEqual(len(result['results']),1)
+        self.assertEqual(result['settings']['min_visual_similarity'],None)
+        self.assertIn('thresholds',result['limitations'])

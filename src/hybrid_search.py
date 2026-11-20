@@ -4,6 +4,41 @@ from __future__ import annotations
 import math
 
 
+def filter_windows_by_similarity(rows, *, mode='hybrid', min_visual_similarity=None,
+                                 min_text_similarity=None):
+    """Keep windows that clear at least one configured, enabled channel floor.
+
+    Floors are raw channel similarities, never the reciprocal-rank-fusion score.
+    With no floors, retain the legacy ranked-candidate behavior.
+    """
+    if mode not in ('visual', 'text', 'hybrid'):
+        raise ValueError('Unknown search mode')
+    thresholds = (min_visual_similarity, min_text_similarity)
+    for value in thresholds:
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or not -1 <= value <= 1
+        ):
+            raise ValueError('Similarity thresholds must be finite numbers from -1 to 1')
+    enabled = []
+    if mode in ('visual', 'hybrid') and min_visual_similarity is not None:
+        enabled.append(('visual', min_visual_similarity))
+    if mode in ('text', 'hybrid') and min_text_similarity is not None:
+        enabled.append(('text', min_text_similarity))
+    if min_visual_similarity is None and min_text_similarity is None:
+        return list(rows)
+    if not enabled:
+        return []
+    accepted = []
+    for row in rows:
+        for channel, floor in enabled:
+            score = row.get('channels', {}).get(channel, {}).get('best_similarity')
+            if isinstance(score, (int, float)) and not isinstance(score, bool) and math.isfinite(score) and score >= floor:
+                accepted.append(row)
+                break
+    return accepted
+
+
 def fuse_windows(visual_rows,text_rows,*,window_seconds=4.0,rrf_k=60,
                  visual_weight=1.0,text_weight=1.0,start_seconds=None,end_seconds=None,limit=10):
     numbers=(window_seconds,rrf_k,visual_weight,text_weight)

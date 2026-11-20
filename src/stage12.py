@@ -41,6 +41,19 @@ def app_setting(name,default=None):
     return os.environ.get(name,APP_ENV.get(name,default))
 
 
+def configured_similarity_threshold(name):
+    value=app_setting(name)
+    if value is None or not value.strip():
+        return None
+    try:
+        threshold=float(value)
+    except (TypeError,ValueError):
+        raise ValueError(f'{name} must be a number from -1 to 1') from None
+    if not math.isfinite(threshold) or not -1<=threshold<=1:
+        raise ValueError(f'{name} must be a number from -1 to 1')
+    return threshold
+
+
 def configured_path(value):
     path=Path(value)
     return path.resolve() if path.is_absolute() else (ROOT/path).resolve()
@@ -499,7 +512,11 @@ def create_app(*,catalog=None,search_fn=None,roots=None,store=None,storage_root=
             args=body.model_dump(exclude={'query','mode'})
             if user['role']!='administrator': args['camera_ids']=user.get('cameras',[])
             args.update(visual_weight=0 if body.mode=='text' else 1,
-                        text_weight=0 if body.mode=='visual' else 1)
+                        text_weight=0 if body.mode=='visual' else 1,
+                        min_visual_similarity=configured_similarity_threshold(
+                            'JARVISTRACE_MIN_VISUAL_SIMILARITY'),
+                        min_text_similarity=configured_similarity_threshold(
+                            'JARVISTRACE_MIN_TEXT_SIMILARITY'))
             report=search_fn(body.query,**args)
             results=[]
             for row in report['comparison'][body.mode]:
@@ -515,7 +532,14 @@ def create_app(*,catalog=None,search_fn=None,roots=None,store=None,storage_root=
                 item['playback_url']='/media/'+media_id if media_id else None
                 item['playback_status']='available' if media_id else 'source unavailable; restart after checking indexed storage'
                 results.append(item)
-            return dict(query=body.query,mode=body.mode,results=results,
+            raw_window_counts=report.get('raw_window_counts') or {
+                mode:len(rows) for mode,rows in report['comparison'].items()}
+            accepted_window_counts=report.get('window_counts') or {
+                mode:len(rows) for mode,rows in report['comparison'].items()}
+            result_status=('matches' if results else
+                'no_strong_match' if raw_window_counts.get(body.mode,0)>0 else 'no_candidates')
+            return dict(query=body.query,mode=body.mode,results=results,result_status=result_status,
+                        raw_window_counts=raw_window_counts,accepted_window_counts=accepted_window_counts,
                         candidate_counts=report['candidate_counts'],limitations=report['limitations'],
                         text_diagnostics=public_evidence(report['text_diagnostics']))
         except HTTPException:

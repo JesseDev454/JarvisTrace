@@ -48,10 +48,12 @@ def search(query, *, camera_id=None, video_id=None, start_seconds=None,
                          text=fuse_windows([],texts,**candidate_settings),
                          hybrid=fuse_windows(images,texts,**candidate_settings))
     raw_window_counts={mode:len(rows) for mode,rows in raw_comparisons.items()}
-    accepted_comparisons={mode:filter_windows_by_similarity(
-                              rows,mode=mode,min_visual_similarity=min_visual_similarity,
-                              min_text_similarity=min_text_similarity)
-                          for mode,rows in raw_comparisons.items()}
+    accepted_settings=dict(candidate_settings,min_visual_similarity=min_visual_similarity,
+                           min_text_similarity=min_text_similarity)
+    accepted_comparisons=dict(
+        visual=fuse_windows(images,[],**accepted_settings),
+        text=fuse_windows([],texts,**accepted_settings),
+        hybrid=fuse_windows(images,texts,**accepted_settings))
     window_counts={mode:len(rows) for mode,rows in accepted_comparisons.items()}
     comparisons={mode:rows[:limit] for mode,rows in accepted_comparisons.items()}
     return dict(report_format='group8-stage11-search-v1',query=query.strip(),

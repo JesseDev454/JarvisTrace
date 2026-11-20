@@ -1,0 +1,117 @@
+{
+  "format": "group8-search-relevance-cutoff-calibration-v1",
+  "calibration": {
+    "annotations_path": "datasets\\mevid\\G507\\evaluation\\validation_round2\\annotations.confirmed.json",
+    "annotations_sha256": "8d03cc13fb34581764a8761000da21fb9022607cca8579fd840fbb92b468d4b8",
+    "clips": 6,
+    "distinct_source_files": 6,
+    "verified_queries": 5,
+    "positive_queries": 2,
+    "negative_queries": 3,
+    "index_schema": "stage13_g507_validation2_frames",
+    "text_coverage": {
+      "available_video_ids": [],
+      "missing_video_ids": [
+        "g507_v2_01_d78d8764e5fd_f2",
+        "g507_v2_02_7a5a21eb8f18_f2",
+        "g507_v2_03_a46ea474a7a5_f2",
+        "g507_v2_04_542ab7a8fb01_f2",
+        "g507_v2_05_941e0bdd49f3_f2",
+        "g507_v2_06_5b6d7c83c973_f2"
+      ],
+      "complete": false,
+      "method": "source-validated ReviewedTextIndex unit-vector probe per clip; no label ingestion"
+    }
+  },
+  "held_out": {
+    "annotations_path": "datasets\\mevid\\G507\\evaluation\\frame_aligned\\interval_review_v1\\annotations.confirmed_positive_subset.json",
+    "annotations_sha256": "0753fa4bb0d90a5b41127820e97d5a5e1fcd9b173ff4b4f0efb63dc7994f6479",
+    "clips": 7,
+    "distinct_source_files": 4,
+    "source_files_disjoint_from_calibration": true,
+    "verified_queries": [
+      "q01",
+      "q02",
+      "q03",
+      "q04"
+    ],
+    "verified_negative_queries": [],
+    "baseline_visual_aggregates": {
+      "positive_queries": 4,
+      "negative_queries": 0,
+      "hit_at_1": 0.25,
+      "hit_at_5": 0.5,
+      "mrr": 0.3242424242424242,
+      "precision_at_5": 0.3
+    }
+  },
+  "settings": {
+    "window_seconds": 4,
+    "rrf_k": 60,
+    "candidate_limit": 100,
+    "limit": 100,
+    "channels_compared": [
+      "visual"
+    ],
+    "threshold_candidates_source": "distinct best_visual_similarity values observed in calibration top-100 windows",
+    "threshold_candidate_count": 240
+  },
+  "baseline_visual": {
+    "positive_hit_at_1": 0.5,
+    "positive_hit_at_5": 0.5,
+    "negative_return_rate": 1.0,
+    "negative_returned_candidates": [
+      48,
+      48,
+      48
+    ],
+    "per_query": {
+      "q01": {
+        "returned_candidates": 48,
+        "hit_at_1": 1,
+        "hit_at_5": 1,
+        "mrr": 1.0,
+        "precision_at_5": 0.4
+      },
+      "q02": {
+        "returned_candidates": 48,
+        "hit_at_1": 0,
+        "hit_at_5": 0,
+        "mrr": 0.034482758620689655,
+        "precision_at_5": 0.0
+      },
+      "q04": {
+        "returned_candidates": 48,
+        "return_rate": 1
+      },
+      "q07": {
+        "returned_candidates": 48,
+        "return_rate": 1
+      },
+      "q08": {
+        "returned_candidates": 48,
+        "return_rate": 1
+      }
+    }
+  },
+  "selection_rule": {
+    "preserve_calibration_positive_hit_at_5": true,
+    "minimize_calibration_negative_return_rate": true,
+    "tie_break": "higher positive Hit@1, then prefer no cutoff"
+  },
+  "selected_visual_cutoff": {
+    "threshold": null,
+    "negative_return_rate": 1.0,
+    "positive_hit_at_1": 0.5,
+    "positive_hit_at_5": 0.5,
+    "negative_returned_candidates": [
+      48,
+      48,
+      48
+    ]
+  },
+  "best_negative_return_rate": 1.0,
+  "eligible_configurations": 143,
+  "text_and_hybrid_status": "not_comparable: the source-validated reviewed text index has no captions for any of the six calibration clips",
+  "release_decision": "no cutoff selected; no visual threshold reduced the calibration negative return rate while preserving baseline positive Hit@5; held-out negative behavior remains unverified"
+}

@@ -40,26 +40,34 @@ def filter_windows_by_similarity(rows, *, mode='hybrid', min_visual_similarity=N
 
 
 def fuse_windows(visual_rows,text_rows,*,window_seconds=4.0,rrf_k=60,
-                 visual_weight=1.0,text_weight=1.0,start_seconds=None,end_seconds=None,limit=10):
+                 visual_weight=1.0,text_weight=1.0,start_seconds=None,end_seconds=None,limit=10,
+                 min_visual_similarity=None,min_text_similarity=None):
     numbers=(window_seconds,rrf_k,visual_weight,text_weight)
     if (not all(math.isfinite(x) for x in numbers) or window_seconds<=0 or rrf_k<0
             or min(visual_weight,text_weight)<0 or visual_weight+text_weight<=0
             or type(limit) is not int or not 1<=limit<=100):
         raise ValueError('Invalid window/fusion settings')
+    filter_windows_by_similarity([],mode='hybrid',min_visual_similarity=min_visual_similarity,
+                                 min_text_similarity=min_text_similarity)
     for v in (start_seconds,end_seconds):
         if v is not None and (not math.isfinite(v) or v<0):
             raise ValueError('Time bounds must be finite and nonnegative')
     if start_seconds is not None and end_seconds is not None and end_seconds<=start_seconds:
         raise ValueError('End must follow start')
     windows,profiles={},{}
+    qualified_windows=set()
+    configured_thresholds=(min_visual_similarity is not None or min_text_similarity is not None)
     for channel,rows,weight in [('visual',visual_rows,visual_weight),('text',text_rows,text_weight)]:
         if weight==0:
             continue
+        threshold=min_visual_similarity if channel=='visual' else min_text_similarity
         found={}
         for original_rank,row in enumerate(rows,1):
             duration=row['duration_seconds']
             if not math.isfinite(duration) or duration<=0 or not math.isfinite(row['similarity']):
                 raise ValueError('Invalid source duration/similarity')
+            if threshold is not None and row['similarity']<threshold:
+                continue
             source=(row['video_id'],row['camera_id'],row['source_sha256'])
             profile=(row['source_video_path'],duration)
             if source in profiles and profiles[source]!=profile:
@@ -95,6 +103,8 @@ def fuse_windows(visual_rows,text_rows,*,window_seconds=4.0,rrf_k=60,
                     found[key]={'original_rank':original_rank,'evidence':[]}
                 if len(found[key]['evidence'])<5:
                     found[key]['evidence'].append(dict(row))
+                if threshold is not None:
+                    qualified_windows.add(key)
                 if key not in windows:
                     windows[key]=dict(video_id=row['video_id'],camera_id=row['camera_id'],
                         source_sha256=row['source_sha256'],source_video_path=row['source_video_path'],
@@ -106,5 +116,7 @@ def fuse_windows(visual_rows,text_rows,*,window_seconds=4.0,rrf_k=60,
             windows[key]['channels'][channel]=dict(rank=rank,weight=weight,
                 rrf_contribution=contribution,best_similarity=hit['evidence'][0]['similarity'],
                 evidence=hit['evidence'])
+    if configured_thresholds:
+        windows={key:row for key,row in windows.items() if key in qualified_windows}
     return sorted(windows.values(),key=lambda w:(-w['rrf_score'],w['video_id'],w['camera_id'],
                   w['source_sha256'],w['start_seconds']))[:limit]

@@ -44,6 +44,25 @@ class FusionTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 filter_windows_by_similarity(rows, mode='visual', min_visual_similarity=value)
 
+    def test_channel_floors_filter_evidence_before_reciprocal_rank_fusion(self):
+        rows = fuse_windows(
+            [
+                visual(1, video='visual-match', similarity=.31),
+                visual(1, video='weak-match', similarity=.29),
+            ],
+            [
+                text(0, 4, video='text-match', similarity=.52),
+                text(0, 4, video='weak-match', similarity=.46),
+            ],
+            min_visual_similarity=.30,
+            min_text_similarity=.50,
+        )
+
+        self.assertEqual({row['video_id'] for row in rows}, {'visual-match', 'text-match'})
+        self.assertAlmostEqual(rows[0]['rrf_score'], 1 / 61)
+        self.assertAlmostEqual(rows[1]['rrf_score'], 1 / 61)
+        self.assertEqual(rows[0]['channels'].keys() | rows[1]['channels'].keys(), {'visual', 'text'})
+
     def test_one_vote_per_channel_window_and_exact_rrf(self):
         rows=fuse_windows([visual(1),visual(2),visual(5)],[text(0,4)],window_seconds=4,rrf_k=60)
         self.assertEqual([(r['start_seconds'],r['end_seconds']) for r in rows],[(0,4),(4,8)])

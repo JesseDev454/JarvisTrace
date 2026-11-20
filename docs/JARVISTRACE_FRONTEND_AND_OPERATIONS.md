@@ -284,6 +284,19 @@ unchanged. The detailed method, per-case results, evidence hashes, and larger
 encoder download blocker are in
 [`docs/evaluation/CAMTEST_CROP_MODEL_COMPARISON_2026-11-20.md`](evaluation/CAMTEST_CROP_MODEL_COMPARISON_2026-11-20.md).
 
+#### Relevance cutoff calibration (2026-11-20)
+
+The Stage 11 cutoff path now filters channel evidence before RRF ranking and
+re-ranks the surviving channel evidence. A visual-only sweep tested 240 score
+floors against the six verified round 2 G507 clips. None reduced the negative
+return rate while preserving positive Hit@5, so the selected configuration is
+no cutoff. The seven source-disjoint first-round clips have four verified
+positive queries but no verified negatives. Reviewed caption coverage is also
+missing on all six calibration clips, so hybrid/text cutoffs remain unmeasured.
+The release gate remains closed pending reviewed held-out negatives and
+calibration captions. Full methodology and metrics are in
+[`docs/evaluation/CAMTEST_RELEVANCE_CUTOFFS_2026-11-20.md`](evaluation/CAMTEST_RELEVANCE_CUTOFFS_2026-11-20.md).
+
 A temporary investigator session assigned only to `CAM-TEST` saw no restricted-camera recordings. A search forced to `CAM-RESTRICTED` and direct access to its media both returned HTTP 403. Positive searches through that scoped API session returned only authorized `CAM-TEST` candidates. The live production browser remained in the administrator session; completing the investigator sign-in and search flow in a browser is still outstanding.
 
 ### Frontend verification

@@ -24,6 +24,13 @@ from src.retrieval import (
     query_asset_sightings,
 )
 from src.storage import SightingStore
+from src.verification import (
+    VERDICT_CONTRADICTED_CANDIDATE,
+    VERDICT_INCONCLUSIVE,
+    VERDICT_SUPPORTED_CANDIDATE,
+    build_reference_asset_anchor,
+    verify_candidates_against_reference,
+)
 from src.visual_search import (
     ChromaVisualIndex,
     OpenCLIPEmbedder,
@@ -743,7 +750,7 @@ class TestOpenCLIPAndChromaDBVisualRetrieval(unittest.TestCase):
     """Milestone 3: Unit and live tests for OpenCLIP embedding extraction and ChromaDB visual search."""
 
     def setUp(self) -> None:
-        self.tmp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.tmp_dir = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp_dir.name)
         self.db_path = self.base / "visual_test.db"
         self.chroma_dir = self.base / "chroma_test"
@@ -751,8 +758,20 @@ class TestOpenCLIPAndChromaDBVisualRetrieval(unittest.TestCase):
         self.ev_dir.mkdir(parents=True, exist_ok=True)
         self.store = SightingStore(db_path=self.db_path, jsonl_path=None)
         self.encoder = DummyDeterministicEncoder()
+        self._open_indices: list[ChromaVisualIndex] = []
+
+    def _create_index(self, collection_name: str) -> ChromaVisualIndex:
+        idx = ChromaVisualIndex(persist_dir=self.chroma_dir, collection_name=collection_name)
+        self._open_indices.append(idx)
+        return idx
 
     def tearDown(self) -> None:
+        import gc
+
+        for idx in self._open_indices:
+            idx.close(delete_collection_handles=True)
+        self._open_indices.clear()
+        gc.collect()
         self.tmp_dir.cleanup()
 
     def _save_solid_image(self, path: Path, rgb: tuple[int, int, int], size: tuple[int, int] = (120, 90)) -> str:
@@ -873,7 +892,7 @@ class TestOpenCLIPAndChromaDBVisualRetrieval(unittest.TestCase):
         _, persisted = self._register_run_and_sightings(frames=[0, 1, 2])
         self.assertEqual(len(persisted), 3)
 
-        index_a = ChromaVisualIndex(persist_dir=self.chroma_dir, collection_name="test_col")
+        index_a = self._create_index("test_col")
         res_1 = index_a.index_sightings_from_store(self.store, encoder=self.encoder)
         # 3 sightings * 2 variants (crop + context) = 6 embeddings
         self.assertEqual(res_1["sightings_indexed"], 3)
@@ -884,9 +903,10 @@ class TestOpenCLIPAndChromaDBVisualRetrieval(unittest.TestCase):
         res_2 = index_a.index_sightings_from_store(self.store, encoder=self.encoder)
         self.assertEqual(res_2["collection_total_embeddings"], 6)
         self.assertEqual(index_a.count(), 6)
+        index_a.close(delete_collection_handles=False)
 
         # Reload a fresh ChromaVisualIndex instance from the same directory -> 6 embeddings persisted
-        index_reloaded = ChromaVisualIndex(persist_dir=self.chroma_dir, collection_name="test_col")
+        index_reloaded = self._create_index("test_col")
         self.assertEqual(index_reloaded.count(), 6)
         stats = index_reloaded.get_index_stats(store=self.store)
         self.assertEqual(stats["total_embeddings"], 6)
@@ -902,7 +922,7 @@ class TestOpenCLIPAndChromaDBVisualRetrieval(unittest.TestCase):
             frames=[0, 1, 2, 3],
         )
         old_sighting_ids = {s.sighting_id for s in sightings_1}
-        index = ChromaVisualIndex(persist_dir=self.chroma_dir, collection_name="test_stale")
+        index = self._create_index("test_stale")
         index.index_sightings_from_store(self.store, encoder=self.encoder)
         self.assertEqual(index.count(), 8)  # 4 sightings * 2 variants
 
@@ -946,7 +966,7 @@ class TestOpenCLIPAndChromaDBVisualRetrieval(unittest.TestCase):
         assert sightings[0].evidence_crop_path is not None
         Path(sightings[0].evidence_crop_path).unlink()
 
-        index = ChromaVisualIndex(persist_dir=self.chroma_dir, collection_name="test_missing")
+        index = self._create_index("test_missing")
         summary = index.index_sightings_from_store(self.store, encoder=self.encoder)
         # Sighting 0 has only context (1), Sighting 1 has crop + context (2) -> total 3 embeddings, 1 missing file
         self.assertEqual(summary["missing_or_corrupt_evidence_files"], 1)
@@ -973,7 +993,7 @@ class TestOpenCLIPAndChromaDBVisualRetrieval(unittest.TestCase):
             frames=[0, 1, 2],
             conf=0.28,
         )
-        index = ChromaVisualIndex(persist_dir=self.chroma_dir, collection_name="test_filters")
+        index = self._create_index("test_filters")
         index.index_sightings_from_store(self.store, encoder=self.encoder)
 
         # 1. Camera filter restricts results strictly to corridor_cam_02
@@ -1063,6 +1083,435 @@ class TestOpenCLIPAndChromaDBVisualRetrieval(unittest.TestCase):
             rep_phone.track_candidate_groups[0].max_clip_similarity,
             rep_laptop.track_candidate_groups[3].max_clip_similarity,
         )
+
+
+class TestReferenceAnchoredCandidateVerification(unittest.TestCase):
+    """Milestone 4: Reference asset anchoring and multi-factor candidate verification tests."""
+
+    def setUp(self) -> None:
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp_dir.name)
+        self.db_path = self.base / "verify_test.db"
+        self.chroma_dir = self.base / "chroma_verify"
+        self.ev_dir = self.base / "evidence"
+        self.ev_dir.mkdir(parents=True, exist_ok=True)
+        self.store = SightingStore(db_path=self.db_path, jsonl_path=None)
+        self.encoder = DummyDeterministicEncoder()
+        self._open_indices: list[ChromaVisualIndex] = []
+
+    def _create_index(self, collection_name: str = "verify_col") -> ChromaVisualIndex:
+        idx = ChromaVisualIndex(persist_dir=self.chroma_dir, collection_name=collection_name)
+        self._open_indices.append(idx)
+        return idx
+
+    def tearDown(self) -> None:
+        import gc
+
+        for idx in self._open_indices:
+            idx.close(delete_collection_handles=True)
+        self._open_indices.clear()
+        gc.collect()
+        self.tmp_dir.cleanup()
+
+    def _save_textured_image(
+        self,
+        path: Path,
+        base_rgb: tuple[int, int, int],
+        size: tuple[int, int] = (120, 80),
+    ) -> str:
+        """Create a textured RGB image so both HSV histogram correlation and OpenCLIP dummy vectors work."""
+        import numpy as np
+        from PIL import Image
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        w, h = size
+        arr = np.zeros((h, w, 3), dtype=np.uint8)
+        for y in range(h):
+            for x in range(w):
+                shift = int(((x * 3 + y * 5) % 40) - 20)
+                arr[y, x, 0] = max(0, min(255, base_rgb[0] + shift))
+                arr[y, x, 1] = max(0, min(255, base_rgb[1] + shift // 2))
+                arr[y, x, 2] = max(0, min(255, base_rgb[2] - shift // 2))
+        Image.fromarray(arr).save(path, format="JPEG")
+        return path.as_posix()
+
+    def _register_camera_track(
+        self,
+        camera_id: str,
+        source_video: str,
+        local_track_id: int,
+        frames: list[int],
+        conf: float,
+        base_rgb: tuple[int, int, int] = (220, 40, 40),
+        recording_start_utc: str | None = "2026-11-05T09:00:00+01:00",
+        time_offset_seconds: float | None = None,
+        with_evidence: bool = True,
+        bbox: tuple[float, float, float, float] = (100.0, 100.0, 220.0, 180.0),
+    ) -> tuple[int, list[SightingRecord]]:
+        existing = self.store.get_ingestion_runs(camera_id=camera_id, source_video=source_video)
+        if existing and existing[0].run_id is not None:
+            run_id = int(existing[0].run_id)
+        else:
+            meta = VideoMetadata(
+                camera_id=camera_id,
+                source_video=source_video,
+                source_identity=f"id:{camera_id}:{source_video}",
+                fps=24.0,
+                frame_count=240,
+                width=640,
+                height=360,
+                duration_seconds=10.0,
+                model_name="yolo11m.pt",
+                tracker_name="botsort.yaml",
+                conf_threshold=0.15,
+                recording_start_utc=recording_start_utc,
+                time_offset_seconds=time_offset_seconds,
+                ingested_at_utc="2026-11-05T12:00:00+00:00",
+            )
+            run_id = self.store.create_ingestion_run(meta, replace_existing_for_source=False)
+
+        records: list[SightingRecord] = []
+        for f in frames:
+            crop_p = None
+            frame_p = None
+            if with_evidence:
+                crop_p = self._save_textured_image(
+                    self.ev_dir / camera_id / f"{source_video}_t{local_track_id}_f{f}_crop.jpg",
+                    base_rgb=base_rgb,
+                    size=(96, 64),
+                )
+                frame_p = self._save_textured_image(
+                    self.ev_dir / camera_id / f"{source_video}_t{local_track_id}_f{f}_frame.jpg",
+                    base_rgb=base_rgb,
+                    size=(320, 240),
+                )
+            records.append(
+                SightingRecord(
+                    run_id=run_id,
+                    camera_id=camera_id,
+                    source_video=source_video,
+                    frame_index=f,
+                    timestamp_seconds=round(f / 24.0, 4),
+                    class_id=63,
+                    class_name="laptop",
+                    local_track_id=local_track_id,
+                    confidence=conf,
+                    bbox_xyxy=bbox,
+                    evidence_crop_path=crop_p,
+                    evidence_frame_path=frame_p,
+                )
+            )
+        persisted = self.store.insert_sightings(records)
+        return run_id, persisted
+
+    def test_1_plausible_cross_camera_transition_supported_candidate(self) -> None:
+        """Synthetic Scenario 1: Plausible synchronized transition across cameras with matching appearance."""
+        self._register_camera_track(
+            camera_id="office_cam_01",
+            source_video="cam1.mp4",
+            local_track_id=1,
+            frames=[0, 12, 24, 36],
+            conf=0.92,
+            base_rgb=(220, 40, 40),
+            recording_start_utc="2026-11-05T09:00:00+01:00",
+        )
+        # Camera 2 starts 15 seconds later and sees a visually matching, strongly supported track
+        self._register_camera_track(
+            camera_id="corridor_cam_02",
+            source_video="cam2.mp4",
+            local_track_id=1,
+            frames=[12, 24, 36, 48],
+            conf=0.89,
+            base_rgb=(218, 42, 42),
+            recording_start_utc="2026-11-05T09:00:15+01:00",
+        )
+        idx = self._create_index("sync_transition")
+        idx.index_sightings_from_store(self.store, encoder=self.encoder)
+
+        anchor = build_reference_asset_anchor(
+            store=self.store,
+            camera_id="office_cam_01",
+            source_video="cam1.mp4",
+            local_track_id=1,
+            visual_index=idx,
+            encoder=self.encoder,
+        )
+        rep = verify_candidates_against_reference(
+            store=self.store,
+            reference_anchor=anchor,
+            visual_index=idx,
+            encoder=self.encoder,
+        )
+        self.assertEqual(len(rep.candidate_results), 1)
+        cand = rep.candidate_results[0]
+        self.assertEqual(cand.verification_outcome, VERDICT_SUPPORTED_CANDIDATE)
+        self.assertEqual(rep.overall_verification_status, VERDICT_SUPPORTED_CANDIDATE)
+        self.assertGreater(cand.spatiotemporal_factors["transition_gap_seconds"], 10.0)
+        # Ensure tracks were NOT merged
+        self.assertNotEqual(cand.candidate_scoped_track_key, anchor.scoped_track_key)
+
+    def test_2_simultaneous_multi_camera_sightings_contradict_single_asset_identity(self) -> None:
+        """Synthetic Scenario 2: Simultaneous sightings in two non-overlapping cameras -> CONTRADICTED_CANDIDATE."""
+        self._register_camera_track(
+            camera_id="office_cam_01",
+            source_video="cam1_sim.mp4",
+            local_track_id=1,
+            frames=[24, 25, 26, 27],
+            conf=0.91,
+            base_rgb=(220, 40, 40),
+            recording_start_utc="2026-11-05T09:00:00+01:00",
+        )
+        self._register_camera_track(
+            camera_id="lobby_cam_02",
+            source_video="cam2_sim.mp4",
+            local_track_id=1,
+            frames=[25, 26, 27, 28],
+            conf=0.88,
+            base_rgb=(220, 40, 40),
+            recording_start_utc="2026-11-05T09:00:00+01:00",
+        )
+        idx = self._create_index("sim_conflict")
+        idx.index_sightings_from_store(self.store, encoder=self.encoder)
+
+        anchor = build_reference_asset_anchor(
+            store=self.store,
+            camera_id="office_cam_01",
+            source_video="cam1_sim.mp4",
+            local_track_id=1,
+            visual_index=idx,
+            encoder=self.encoder,
+        )
+        rep = verify_candidates_against_reference(
+            store=self.store,
+            reference_anchor=anchor,
+            visual_index=idx,
+            encoder=self.encoder,
+        )
+        self.assertEqual(len(rep.candidate_results), 1)
+        cand = rep.candidate_results[0]
+        self.assertEqual(cand.verification_outcome, VERDICT_CONTRADICTED_CANDIDATE)
+        self.assertTrue(cand.contradiction_overlap_factors["simultaneous_with_reference"])
+        self.assertEqual(rep.overall_verification_status, VERDICT_INCONCLUSIVE)
+
+    def test_3_unsynchronized_videos_always_return_inconclusive(self) -> None:
+        """Synthetic Scenario 3: Unsynchronized camera videos cannot prove chronological transition -> INCONCLUSIVE."""
+        self._register_camera_track(
+            camera_id="office_cam_01",
+            source_video="cam1_unsync.mp4",
+            local_track_id=1,
+            frames=[0, 1, 2, 3],
+            conf=0.90,
+            recording_start_utc=None,
+        )
+        self._register_camera_track(
+            camera_id="corridor_cam_02",
+            source_video="cam2_unsync.mp4",
+            local_track_id=1,
+            frames=[48, 49, 50, 51],
+            conf=0.90,
+            recording_start_utc=None,
+        )
+        idx = self._create_index("unsync_col")
+        idx.index_sightings_from_store(self.store, encoder=self.encoder)
+
+        anchor = build_reference_asset_anchor(
+            store=self.store,
+            camera_id="office_cam_01",
+            source_video="cam1_unsync.mp4",
+            local_track_id=1,
+            visual_index=idx,
+            encoder=self.encoder,
+        )
+        rep = verify_candidates_against_reference(
+            store=self.store,
+            reference_anchor=anchor,
+            visual_index=idx,
+            encoder=self.encoder,
+        )
+        self.assertFalse(rep.chronologically_orderable)
+        self.assertEqual(rep.candidate_results[0].verification_outcome, VERDICT_INCONCLUSIVE)
+        self.assertTrue(
+            any("MISSING CAMERA SYNCHRONIZATION" in m for m in rep.candidate_results[0].missing_evidence)
+        )
+
+    def test_4_conflicting_appearance_and_multiple_similar_assets(self) -> None:
+        """Synthetic Scenarios 4 & 6: Conflicting color/appearance is contradicted; multiple matching candidates -> INCONCLUSIVE."""
+        self._register_camera_track(
+            camera_id="office_cam_01",
+            source_video="cam1_ref.mp4",
+            local_track_id=1,
+            frames=[0, 1, 2, 3],
+            conf=0.92,
+            base_rgb=(230, 30, 30),  # Red-dominant profile
+            recording_start_utc="2026-11-05T09:00:00+01:00",
+        )
+        # Candidate A in Camera 2: completely different color/appearance (Blue-dominant) -> CONTRADICTED_CANDIDATE
+        self._register_camera_track(
+            camera_id="corridor_cam_02",
+            source_video="cam2_diff.mp4",
+            local_track_id=1,
+            frames=[10, 11, 12, 13],
+            conf=0.88,
+            base_rgb=(20, 30, 235),
+            recording_start_utc="2026-11-05T09:00:10+01:00",
+        )
+        idx = self._create_index("appearance_conflict")
+        idx.index_sightings_from_store(self.store, encoder=self.encoder)
+
+        anchor = build_reference_asset_anchor(
+            store=self.store,
+            camera_id="office_cam_01",
+            source_video="cam1_ref.mp4",
+            local_track_id=1,
+            visual_index=idx,
+            encoder=self.encoder,
+        )
+        rep_diff = verify_candidates_against_reference(
+            store=self.store,
+            reference_anchor=anchor,
+            visual_index=idx,
+            encoder=self.encoder,
+        )
+        self.assertEqual(rep_diff.candidate_results[0].verification_outcome, VERDICT_CONTRADICTED_CANDIDATE)
+
+        # Now add two separate matching candidates in Camera 3 and Camera 4 -> overall INCONCLUSIVE due to ambiguity
+        self._register_camera_track(
+            camera_id="lobby_cam_03",
+            source_video="cam3_match.mp4",
+            local_track_id=1,
+            frames=[10, 11, 12, 13],
+            conf=0.90,
+            base_rgb=(228, 32, 32),
+            recording_start_utc="2026-11-05T09:00:20+01:00",
+        )
+        self._register_camera_track(
+            camera_id="exit_cam_04",
+            source_video="cam4_match.mp4",
+            local_track_id=1,
+            frames=[10, 11, 12, 13],
+            conf=0.90,
+            base_rgb=(226, 34, 34),
+            recording_start_utc="2026-11-05T09:00:40+01:00",
+        )
+        idx.index_sightings_from_store(self.store, encoder=self.encoder)
+        rep_multi = verify_candidates_against_reference(
+            store=self.store,
+            reference_anchor=anchor,
+            visual_index=idx,
+            encoder=self.encoder,
+        )
+        self.assertEqual(rep_multi.supported_candidates_count, 2)
+        self.assertEqual(rep_multi.overall_verification_status, VERDICT_INCONCLUSIVE)
+
+    def test_5_no_supporting_sighting_and_incomplete_occlusion_tracking(self) -> None:
+        """Synthetic Scenarios 5 & 7: Camera with no sightings or low-stability occlusion fragments -> INCONCLUSIVE."""
+        self._register_camera_track(
+            camera_id="office_cam_01",
+            source_video="cam1_occ.mp4",
+            local_track_id=1,
+            frames=[0, 1, 2, 3],
+            conf=0.93,
+            recording_start_utc="2026-11-05T09:00:00+01:00",
+        )
+        anchor = build_reference_asset_anchor(
+            store=self.store,
+            camera_id="office_cam_01",
+            source_video="cam1_occ.mp4",
+            local_track_id=1,
+            encoder=self.encoder,
+        )
+        # 1. No other candidate tracks in database -> INCONCLUSIVE
+        rep_empty = verify_candidates_against_reference(
+            store=self.store,
+            reference_anchor=anchor,
+            encoder=self.encoder,
+        )
+        self.assertEqual(rep_empty.total_candidates_evaluated, 0)
+        self.assertEqual(rep_empty.overall_verification_status, VERDICT_INCONCLUSIVE)
+
+        # 2. Incomplete 2-frame low-confidence fragment after occlusion without saved evidence -> INCONCLUSIVE
+        self._register_camera_track(
+            camera_id="corridor_cam_02",
+            source_video="cam2_occ.mp4",
+            local_track_id=9,
+            frames=[100, 101],
+            conf=0.24,
+            recording_start_utc="2026-11-05T09:00:10+01:00",
+            with_evidence=False,
+        )
+        rep_occ = verify_candidates_against_reference(
+            store=self.store,
+            reference_anchor=anchor,
+            encoder=self.encoder,
+        )
+        self.assertEqual(len(rep_occ.candidate_results), 1)
+        self.assertEqual(rep_occ.candidate_results[0].verification_outcome, VERDICT_INCONCLUSIVE)
+        self.assertTrue(
+            any("MISSING OPENCLIP EMBEDDINGS" in m for m in rep_occ.candidate_results[0].missing_evidence)
+        )
+
+    @unittest.skipUnless(
+        Path("outputs/sightings.db").exists()
+        and Path("outputs/chroma_db").exists()
+        and Path("laptop_test.mp4").exists(),
+        "Real outputs/sightings.db, outputs/chroma_db, and laptop_test.mp4 required for live verification test.",
+    )
+    def test_6_live_laptop_test_mp4_reference_anchor_and_tracks_7_and_12(self) -> None:
+        """Task 4: Anchor local_track_1 in laptop_test.mp4 and verify local_track_7 (CONTRADICTED) & local_track_12 (INCONCLUSIVE)."""
+        store = SightingStore(db_path="outputs/sightings.db", jsonl_path=None)
+        index = ChromaVisualIndex(persist_dir="outputs/chroma_db")
+        encoder = OpenCLIPEmbedder.get_instance()
+
+        anchor = build_reference_asset_anchor(
+            store=store,
+            camera_id="office_cam_01",
+            source_video="laptop_test.mp4",
+            local_track_id=1,
+            visual_index=index,
+            encoder=encoder,
+        )
+        self.assertEqual(anchor.scoped_track_key, "run1:office_cam_01:laptop_test.mp4:local_track_1")
+        self.assertEqual(anchor.track_support_status, "STRONGLY_SUPPORTED")
+        self.assertEqual(anchor.frame_count, 111)
+        self.assertEqual(anchor.evidence_sampled_frame_count, 20)
+        self.assertEqual(len(anchor.representative_appearances), 4)
+        roles = [a.role for a in anchor.representative_appearances]
+        self.assertEqual(
+            roles,
+            [
+                "first_appearance_state",
+                "peak_confidence_state",
+                "last_strongly_supported_state",
+                "track_fadeout_last_state",
+            ],
+        )
+
+        report = verify_candidates_against_reference(
+            store=store,
+            reference_anchor=anchor,
+            visual_index=index,
+            encoder=encoder,
+        )
+        self.assertEqual(report.overall_verification_status, VERDICT_INCONCLUSIVE)
+        self.assertEqual(report.total_candidates_evaluated, 2)
+
+        by_tid = {c.candidate_local_track_id: c for c in report.candidate_results}
+        self.assertIn(7, by_tid)
+        self.assertIn(12, by_tid)
+
+        # Track 7 (stationary desk telephone) MUST be CONTRADICTED_CANDIDATE
+        res_7 = by_tid[7]
+        self.assertEqual(res_7.verification_outcome, VERDICT_CONTRADICTED_CANDIDATE)
+        self.assertTrue(res_7.background_stationarity_factors["is_stationary_background_fixture"])
+        self.assertGreater(res_7.background_stationarity_factors["pre_arrival_frame0_ncc"], 0.95)
+        self.assertLess(res_7.color_texture_factors["max_hsv_histogram_correlation"], 0.15)
+
+        # Track 12 (possible placed laptop overlapping telephone region) MUST be INCONCLUSIVE (never auto-merged)
+        res_12 = by_tid[12]
+        self.assertEqual(res_12.verification_outcome, VERDICT_INCONCLUSIVE)
+        self.assertTrue(res_12.background_stationarity_factors["is_partially_conflated_with_background"])
+        self.assertLess(res_12.background_stationarity_factors["placed_subregion_frame0_ncc"], 0.80)
+        self.assertGreater(res_12.openclip_similarity_factors["max_crop_cosine_similarity"], 0.75)
 
 
 if __name__ == "__main__":

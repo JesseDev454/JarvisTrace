@@ -14,6 +14,9 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 import torch
 
+from src.clip_encoder import (OpenCLIPEmbedder, VisualTextEncoder,
+                              normalize_embedding_vector, make_model_identifier)
+
 from src.models import (
     SightingRecord,
     TrackSummary,
@@ -34,11 +37,6 @@ DEFAULT_CHROMA_COLLECTION = "sighting_visual_embeddings"
 VALID_EMBEDDING_VARIANTS = ("crop", "context")
 
 
-def make_model_identifier(model_name: str, pretrained: str) -> str:
-    """Return a canonical identifier string for an OpenCLIP model and pretrained tag."""
-    return f"openclip:{model_name.strip()}:{pretrained.strip()}"
-
-
 def make_embedding_id(
     sighting_id: int,
     variant: str,
@@ -49,137 +47,6 @@ def make_embedding_id(
         raise ValueError(f"Invalid embedding variant '{variant}'; expected one of {VALID_EMBEDDING_VARIANTS}")
     safe_model = model_id.replace(":", "_").replace("/", "_")
     return f"s{int(sighting_id)}_{variant}_{safe_model}"
-
-
-def normalize_embedding_vector(vec: np.ndarray | Sequence[float]) -> np.ndarray:
-    """L2-normalize a 1D or 2D embedding array so cosine similarity equals dot product."""
-    arr = np.asarray(vec, dtype=np.float32)
-    if arr.ndim == 1:
-        norm = float(np.linalg.norm(arr))
-        if norm <= 1e-12:
-            raise ValueError("Cannot L2-normalize a zero-norm embedding vector.")
-        return (arr / norm).astype(np.float32)
-    if arr.ndim == 2:
-        norms = np.linalg.norm(arr, axis=1, keepdims=True)
-        if np.any(norms <= 1e-12):
-            raise ValueError("Cannot L2-normalize a batch containing a zero-norm embedding vector.")
-        return (arr / norms).astype(np.float32)
-    raise ValueError(f"Expected 1D or 2D array for normalization, got shape {arr.shape}")
-
-
-class VisualTextEncoder(Protocol):
-    """Protocol for visual/text encoders (enables both real OpenCLIP and lightweight unit-test encoders)."""
-
-    @property
-    def model_id(self) -> str: ...
-
-    @property
-    def embedding_dim(self) -> int: ...
-
-    @property
-    def device_str(self) -> str: ...
-
-    def encode_images(self, pil_images: Sequence[Image.Image]) -> np.ndarray: ...
-
-    def encode_text(self, query_text: str) -> np.ndarray: ...
-
-
-class OpenCLIPEmbedder:
-    """Singleton-cached OpenCLIP image and text encoder running on CUDA when available."""
-
-    _instance_cache: dict[tuple[str, str, str], "OpenCLIPEmbedder"] = {}
-
-    def __init__(
-        self,
-        model_name: str = DEFAULT_CLIP_MODEL_NAME,
-        pretrained: str = DEFAULT_CLIP_PRETRAINED,
-        device: Optional[str] = None,
-    ) -> None:
-        import open_clip
-
-        self.model_name = model_name
-        self.pretrained = pretrained
-        if device is not None:
-            resolved_dev = str(device)
-        else:
-            resolved_dev = "cuda" if torch.cuda.is_available() else "cpu"
-        self._device = torch.device(resolved_dev)
-        self._model_id = make_model_identifier(model_name, pretrained)
-
-        model, _, preprocess = open_clip.create_model_and_transforms(
-            model_name,
-            pretrained=pretrained,
-            device=self._device,
-        )
-        model.eval()
-        self._model = model
-        self._preprocess = preprocess
-        self._tokenizer = open_clip.get_tokenizer(model_name)
-
-        # Determine output embedding dimension with a dummy forward pass or attribute inspection
-        with torch.no_grad():
-            dummy_tokens = self._tokenizer(["test"]).to(self._device)
-            dummy_feat = self._model.encode_text(dummy_tokens)
-            self._embedding_dim = int(dummy_feat.shape[-1])
-
-    @classmethod
-    def get_instance(
-        cls,
-        model_name: str = DEFAULT_CLIP_MODEL_NAME,
-        pretrained: str = DEFAULT_CLIP_PRETRAINED,
-        device: Optional[str] = None,
-    ) -> "OpenCLIPEmbedder":
-        """Load the OpenCLIP model once per (model_name, pretrained, device) key."""
-        resolved_dev = str(device) if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
-        cache_key = (model_name, pretrained, resolved_dev)
-        if cache_key not in cls._instance_cache:
-            cls._instance_cache[cache_key] = cls(
-                model_name=model_name,
-                pretrained=pretrained,
-                device=resolved_dev,
-            )
-        return cls._instance_cache[cache_key]
-
-    @property
-    def model_id(self) -> str:
-        return self._model_id
-
-    @property
-    def embedding_dim(self) -> int:
-        return self._embedding_dim
-
-    @property
-    def device_str(self) -> str:
-        return str(self._device)
-
-    def encode_images(self, pil_images: Sequence[Image.Image], batch_size: int = 32) -> np.ndarray:
-        """Encode one or more PIL RGB images into L2-normalized float32 embeddings without gradients."""
-        if not pil_images:
-            return np.empty((0, self._embedding_dim), dtype=np.float32)
-
-        all_batches: list[np.ndarray] = []
-        with torch.no_grad():
-            for start in range(0, len(pil_images), max(1, batch_size)):
-                chunk = pil_images[start : start + max(1, batch_size)]
-                tensors = torch.stack([self._preprocess(img.convert("RGB")) for img in chunk]).to(self._device)
-                feats = self._model.encode_image(tensors)
-                feats = feats / feats.norm(dim=-1, keepdim=True).clamp(min=1e-12)
-                all_batches.append(feats.detach().cpu().to(torch.float32).numpy())
-
-        stacked = np.vstack(all_batches)
-        return normalize_embedding_vector(stacked)
-
-    def encode_text(self, query_text: str) -> np.ndarray:
-        """Encode a natural-language query string into a 1D L2-normalized float32 embedding without gradients."""
-        cleaned = str(query_text or "").strip()
-        if not cleaned:
-            raise ValueError("Search query text cannot be empty.")
-        with torch.no_grad():
-            tokens = self._tokenizer([cleaned]).to(self._device)
-            text_feat = self._model.encode_text(tokens)
-            text_feat = text_feat / text_feat.norm(dim=-1, keepdim=True).clamp(min=1e-12)
-            vec = text_feat[0].detach().cpu().to(torch.float32).numpy()
-        return normalize_embedding_vector(vec)
 
 
 def load_pil_image_safely(image_path: str | Path | None) -> Optional[Image.Image]:
@@ -461,6 +328,69 @@ class ChromaVisualIndex:
             name=self.collection_name,
             metadata={"hnsw:space": "cosine"},
         )
+
+    def close(self, delete_collection_handles: bool = False) -> None:
+        """Explicitly stop the underlying ChromaDB Rust/SQLite system and release OS file handles."""
+        if getattr(self, "_client", None) is None:
+            return
+        if delete_collection_handles:
+            try:
+                self._client.delete_collection(name=self.collection_name)
+            except Exception:
+                pass
+        try:
+            if hasattr(self._client, "_system") and self._client._system is not None:
+                self._client._system.stop()
+        except Exception:
+            pass
+        try:
+            if hasattr(self._client, "clear_system_cache"):
+                self._client.clear_system_cache()
+        except Exception:
+            pass
+        self._collection = None  # type: ignore[assignment]
+        self._client = None  # type: ignore[assignment]
+
+    def __enter__(self) -> "ChromaVisualIndex":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
+
+    def get_embeddings_for_sighting_ids(
+        self,
+        sighting_ids: Sequence[int],
+        model_id: Optional[str] = None,
+    ) -> dict[tuple[int, str], np.ndarray]:
+        """Retrieve persisted L2-normalized embeddings keyed by `(sighting_id, variant)`."""
+        if not sighting_ids or self.count() == 0:
+            return {}
+        int_ids = [int(sid) for sid in sighting_ids]
+        where_clauses: list[dict[str, Any]] = []
+        if len(int_ids) == 1:
+            where_clauses.append({"sighting_id": int_ids[0]})
+        else:
+            where_clauses.append({"sighting_id": {"$in": int_ids}})
+        if model_id:
+            where_clauses.append({"embedding_model_id": str(model_id)})
+
+        where_filter: dict[str, Any] = (
+            where_clauses[0] if len(where_clauses) == 1 else {"$and": where_clauses}
+        )
+        res = self._collection.get(where=where_filter, include=["embeddings", "metadatas"])
+        embs = res.get("embeddings")
+        metas = res.get("metadatas")
+        if embs is None or metas is None:
+            return {}
+
+        out: dict[tuple[int, str], np.ndarray] = {}
+        for emb, meta in zip(embs, metas):
+            if not meta or emb is None:
+                continue
+            sid = int(meta.get("sighting_id", -1))
+            var = str(meta.get("embedding_variant", "crop"))
+            out[(sid, var)] = normalize_embedding_vector(np.asarray(emb, dtype=np.float32))
+        return out
 
     def count(self) -> int:
         return int(self._collection.count())

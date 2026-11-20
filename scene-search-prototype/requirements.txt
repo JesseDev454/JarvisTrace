@@ -1,0 +1,8 @@
+# Already installed in the user's existing Group 8 .venv as of 2026-11-13.
+# Use this for a new environment only; don't reinstall working PyTorch/CUDA unnecessarily.
+fastapi
+uvicorn
+psycopg[binary]
+pgvector
+python-dotenv
+sentence-transformers

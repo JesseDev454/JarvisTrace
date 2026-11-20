@@ -1,0 +1,29 @@
+# Local simulation profile. Bind enabled listeners to loopback. RTSP publishing
+# uses TCP only so MediaMTX does not open wildcard UDP or multicast listeners.
+rtsp: yes
+rtspTransports: [tcp]
+rtspAddress: 127.0.0.1:8554
+rtmp: no
+hls: yes
+hlsAddress: 127.0.0.1:8888
+webrtc: yes
+webrtcAddress: 127.0.0.1:8889
+webrtcLocalUDPAddress: 127.0.0.1:8189
+webrtcIPsFromInterfaces: no
+webrtcAdditionalHosts: [127.0.0.1]
+srt: no
+moq: no
+api: no
+
+pathDefaults:
+  record: yes
+  recordPath: ./mediamtx/recordings/%path/%s-%f
+  recordFormat: fmp4
+  recordPartDuration: 1s
+  recordMaxPartSize: 50M
+  recordSegmentDuration: 60s
+  recordDeleteAfter: 0s
+  runOnRecordSegmentComplete: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mediamtx_segment_hook.ps1
+
+paths:
+  all_others: {}

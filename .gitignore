@@ -3,6 +3,11 @@
 venv/
 env/
 
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+
 # Python cache and build artifacts
 __pycache__/
 *.py[cod]
@@ -11,6 +16,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+node_modules/
 
 # Model weights
 *.pt
@@ -21,6 +27,15 @@ build/
 datasets/
 runs/
 outputs/
+mediamtx/recordings/
+mediamtx.exe
+auto.crt
+auto.key
+scene-search-prototype/data/
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
 *.mp4
 *.avi
 *.mpg
